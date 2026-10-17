@@ -16,3 +16,9 @@ nano
 less
 htop
 iw
+rsync
+rclone
+nfs-common
+openssh-client
+dnsmasq-base
+avahi-daemon

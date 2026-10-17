@@ -1,57 +1,71 @@
 # ============================================================================
-#  Glovebox setup
+#  Glovebox: optional settings file
 # ============================================================================
 #
-# Fill this in, then put the card in the Pi (or, if you installed Glovebox on
-# an existing Raspberry Pi OS, restart it: sudo systemctl restart glovebox).
+# You don't need to edit this. Plug the Pi in, and after a couple of minutes
+# it offers its own Wi-Fi network, Glovebox-XXXX. Join it with your phone: a
+# setup wizard opens for your Wi-Fi, backups (with a connection test), extra
+# drives and your car.
 #
-# To use a setting, delete the "# " in front of it and fill in your value.
-# Anything you leave alone keeps its default.
+# This file is for setting up without a phone, or preparing several cards
+# the same way. To use a setting, delete the "# " in front of it and fill in
+# your value; anything you leave alone keeps its default. Every setting is
+# listed in deploy/glovebox.toml in the Glovebox repository.
 #
-# When Glovebox starts, it applies this file, moves it to
-# /etc/glovebox/glovebox.toml (passwords go to root-only files) and leaves
-# glovebox-status.txt here saying what it did, or what was wrong. To change
-# settings later, put a new glovebox.toml here and restart the Pi.
+# When Glovebox starts, it applies this file (passwords go to root-only
+# files), removes it, and leaves glovebox-status.txt here saying what it did
+# or what was wrong. To change settings this way later, put a new
+# glovebox.toml here and restart the Pi.
+#
+# Moved house or changed your Wi-Fi? Put an empty file named glovebox-setup
+# here instead and restart the Pi: the setup network comes back.
 
 
-# ---- 1. Wi-Fi (needed for backups) -----------------------------------------
+# ---- Wi-Fi -------------------------------------------------------------------
 # Your home network. The Pi Zero 2 W only does 2.4 GHz Wi-Fi.
-# Skip this if you installed Glovebox on a Pi that's already on Wi-Fi.
 
 [system]
 # wifi_ssid = "your network name"
 # wifi_password = "your Wi-Fi password"
 # wifi_country = "US"                    # two-letter country code
 
-# Optional: log in over SSH with a key (the Glovebox image has no password
-# login). Paste your public key, e.g. the contents of ~/.ssh/id_ed25519.pub
+# Log in over SSH with a key (the Glovebox image has no password login).
+# Paste your public key, e.g. the contents of ~/.ssh/id_ed25519.pub
 # ssh_key = "ssh-ed25519 AAAA... you@pc"
 # hostname = "glovebox"
 
 
-# ---- 2. Your NAS (where clips are backed up) -------------------------------
-# Any SMB share works: Unraid, Synology, TrueNAS, Windows, ... A user and a
-# share just for Glovebox is a good idea.
+# ---- Backups -----------------------------------------------------------------
+# This is for an SMB share: Unraid, Synology, TrueNAS, Windows, ... For NFS,
+# rsync over SSH or rclone (cloud storage), see deploy/glovebox.toml; an
+# rclone.conf put next to this file is used for rclone.
 
 [archive]
 # enabled = true
+# recent = false                         # true: also back up all driving
+#                                        # footage (15-20 GB per hour on HW4)
+
+[archive.smb]
 # server = "192.168.1.10"                # the NAS's address
 # share = "TeslaCam"                     # the shared folder's name
 # username = "carcam"
 # password = "the share password"
-# recent = false                         # true: also back up all driving
-#                                        # footage (15-20 GB per hour on HW4)
 
 
-# ---- 3. Optional ------------------------------------------------------------
+# ---- Car and drives ----------------------------------------------------------
 
 [keep_awake]
-# Keeps the car awake while it backs up. Pair with your car on the Car page
-# of the web app (http://<the Pi's address>:8080); setting the VIN here just
-# saves typing it there.
+# Keeps the car awake while it backs up. Pairing happens on the Car page of
+# the web app; setting the VIN here just saves typing it there.
 # vin = "your 17-character VIN"
 
 [drive]
 # Size of the car's dashcam drive. By default it gets all the space except
 # 4 GB that Glovebox keeps for snapshots.
 # cam_size = "40G"
+
+# Extra drives with music, a light show or Boombox sounds, copied from a
+# folder on your NAS.
+# [drive.music]
+# size = "8G"
+# source = "Music"                       # for SMB: a share, or share/folder

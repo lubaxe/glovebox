@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -22,6 +23,9 @@ import (
 // Gadget is the part of gadget.Gadget the drive uses.
 type Gadget interface {
 	Enable(ctx context.Context, luns []gadget.LUN) error
+	Disable(ctx context.Context) error
+	Eject(lun int) error
+	Load(lun int, file string) error
 	State() (gadget.State, error)
 }
 
@@ -42,12 +46,17 @@ type Drive struct {
 	MinFree      int64
 	// SpaceCheck is how often free space is checked between snapshots.
 	SpaceCheck time.Duration
+	// EjectPause is how long an extra drive stays ejected while its new
+	// version is swapped in.
+	EjectPause time.Duration
 	// KeepFreePercent is how much of the cam drive the boot-time cleanup
 	// tries to keep free by deleting archived events.
 	KeepFreePercent int
 	// Archived reports whether a cam drive file is safely archived; nil
 	// means nothing is archived, so no events are ever deleted.
 	Archived func(rel string, size int64) bool
+	// Extras are presented after the cam drive, in this order.
+	Extras []Extra
 
 	Gadget    Gadget
 	Snapshots Snapshots
@@ -56,7 +65,9 @@ type Drive struct {
 
 	// Hooks for tests.
 	checkReflink   func(dir string) error
-	createImage    func(ctx context.Context, r system.Runner, path string, size int64, label string) error
+	createImage    func(ctx context.Context, r system.Runner, path string, size int64, label, folder string) error
+	clone          func(src, dst string) error
+	allocated      func(path string) (int64, error)
 	maintainImage  func(ctx context.Context, r system.Runner, path string, work func(mnt string) error) (storage.Maintenance, error)
 	diskSpace      func(path string) (total, free int64, err error)
 	freeBytes      func(path string) (int64, error)
@@ -65,6 +76,8 @@ type Drive struct {
 	mu          sync.Mutex
 	lastErr     string
 	lastCleanup *Cleanup
+	extraStatus map[string]*ExtraStatus
+	syncMu      sync.Mutex // one extra drive sync at a time
 }
 
 // Status is what the API reports about the drive.
@@ -77,6 +90,8 @@ type Status struct {
 	LastError string       `json:"last_error,omitempty"`
 	// Cleanup is what the cleanup at startup did, if it ran.
 	Cleanup *Cleanup `json:"cleanup,omitempty"`
+	// Extras are the music, light show and Boombox drives that are on.
+	Extras []ExtraStatus `json:"extras"`
 }
 
 // New returns a Drive using the real system.
@@ -84,10 +99,12 @@ func New(backingfiles string, camSize int64, interval time.Duration, minFree int
 	g Gadget, snaps Snapshots, r system.Runner, log *slog.Logger) *Drive {
 	return &Drive{
 		Backingfiles: backingfiles, CamSize: camSize, Interval: interval, MinFree: minFree,
-		KeepFreePercent: 25, SpaceCheck: 30 * time.Second,
+		KeepFreePercent: 25, SpaceCheck: 30 * time.Second, EjectPause: 5 * time.Second,
 		Gadget: g, Snapshots: snaps, Runner: r, Log: log,
 		checkReflink:   storage.CheckReflink,
 		createImage:    storage.CreateDiskImage,
+		clone:          storage.Clone,
+		allocated:      storage.Allocated,
 		maintainImage:  storage.MaintainDiskImage,
 		diskSpace:      storage.DiskSpace,
 		freeBytes:      storage.FreeBytes,
@@ -108,6 +125,16 @@ func (d *Drive) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if st.Enabled && (!slices.Equal(st.Files, d.lunFiles()) || !d.extrasReady()) {
+		// The drives were changed in the config. Only reconnecting adds or
+		// removes one, which the car takes like the Pi restarting.
+		d.Log.Info("the set of drives changed; reconnecting them", "was", st.Files, "now", d.lunFiles())
+		if err := d.Gadget.Disable(ctx); err != nil {
+			return err
+		}
+		st.Enabled, st.Files = false, nil
+	}
+	d.removeUnusedExtras(st.Files)
 	if st.Enabled {
 		// The service restarted while the drive stayed connected; the car may
 		// be writing to the image, so leave it alone.
@@ -116,13 +143,22 @@ func (d *Drive) Start(ctx context.Context) error {
 		if err := d.prepareCamDisk(ctx); err != nil {
 			return err
 		}
-		// Present the drive before anything else: until then the car can't
+		if err := d.prepareExtras(ctx); err != nil {
+			// the dashcam matters more than music
+			d.Log.Error("extra drives not available", "err", err)
+			d.setError(err)
+			d.Extras = nil
+		}
+		// Present the drives before anything else: until then the car can't
 		// record.
-		lun := gadget.LUN{File: d.CamDisk(), Product: "CAM"}
-		if err := d.Gadget.Enable(ctx, []gadget.LUN{lun}); err != nil {
+		luns := []gadget.LUN{{File: d.CamDisk(), Product: "CAM"}}
+		for _, x := range d.Extras {
+			luns = append(luns, gadget.LUN{File: d.ExtraDisk(x.Name), Product: x.Label})
+		}
+		if err := d.Gadget.Enable(ctx, luns); err != nil {
 			return err
 		}
-		d.Log.Info("presenting cam disk over USB", "file", lun.File)
+		d.Log.Info("presenting drives over USB", "files", d.lunFiles())
 	}
 
 	// Remounting snapshots doesn't touch the live image, so it can wait
@@ -156,10 +192,10 @@ func (d *Drive) camDiskSize() (int64, error) {
 		}
 		return 0, fmt.Errorf("sizing the cam disk: %w", err)
 	}
-	fits := (free - d.MinFree) / (1 << 30) * (1 << 30)
+	fits := (free - d.MinFree - d.extrasReserve()) / (1 << 30) * (1 << 30)
 	if fits < 1<<30 {
-		return 0, fmt.Errorf("only %d MiB free on %s; the cam disk needs 1 GiB plus %d MiB for snapshots",
-			free>>20, d.Backingfiles, d.MinFree>>20)
+		return 0, fmt.Errorf("only %d MiB free on %s; the cam disk needs 1 GiB plus %d MiB for snapshots and %d MiB for the other drives",
+			free>>20, d.Backingfiles, d.MinFree>>20, d.extrasReserve()>>20)
 	}
 	switch {
 	case d.CamSize == 0:
@@ -184,7 +220,7 @@ func (d *Drive) prepareCamDisk(ctx context.Context) error {
 			return err
 		}
 		d.Log.Info("creating cam disk", "file", cam, "size", size)
-		if err := d.createImage(ctx, d.Runner, cam, size, "CAM"); err != nil {
+		if err := d.createImage(ctx, d.Runner, cam, size, "CAM", "TeslaCam"); err != nil {
 			return fmt.Errorf("creating cam disk: %w", err)
 		}
 	case err != nil:
@@ -337,6 +373,9 @@ func (d *Drive) Status() (Status, error) {
 	d.mu.Lock()
 	st.LastError = d.lastErr
 	st.Cleanup = d.lastCleanup
+	d.mu.Unlock()
+	st.Extras = d.extrasStatus()
+	d.mu.Lock()
 	d.mu.Unlock()
 	return st, nil
 }

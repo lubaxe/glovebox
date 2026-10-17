@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -22,10 +23,12 @@ import (
 	"github.com/lubaxe/glovebox/internal/keepawake"
 	"github.com/lubaxe/glovebox/internal/logfile"
 	"github.com/lubaxe/glovebox/internal/provision"
+	"github.com/lubaxe/glovebox/internal/setup"
 	"github.com/lubaxe/glovebox/internal/snapshot"
 	"github.com/lubaxe/glovebox/internal/sysinfo"
 	"github.com/lubaxe/glovebox/internal/system"
 	"github.com/lubaxe/glovebox/internal/web"
+	"github.com/lubaxe/glovebox/internal/wifi"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -94,6 +97,16 @@ func run() error {
 	defer stop()
 
 	api := &web.Server{Version: version, Status: sysinfo.NewReader(), Log: log}
+	api.Setup = &setup.Setup{
+		ConfigPath: *configPath, Options: archiveOptions(log),
+		Runner: system.Exec{Log: log}, Gateway: setup.Gateway,
+	}
+	api.Restart = func() {
+		// systemd stops this process and starts a new one; the drives stay
+		// connected unless the new settings change them
+		log.Info("restarting to use the new settings")
+		go system.Exec{Log: log}.Run(context.Background(), "systemctl", "--no-block", "restart", "glovebox.service")
+	}
 	if cfg.Drive.Enabled {
 		// On a freshly flashed card this creates the backingfiles partition.
 		bf := &provision.Backingfiles{
@@ -124,6 +137,14 @@ func run() error {
 			case err != nil:
 				log.Error("reading archive state; archiving disabled", "err", err)
 			}
+			if state != nil {
+				if state.UseTarget(cfg.Archive.Destination()) {
+					log.Warn("the archive target changed; archiving everything to the new one", "target", cfg.Archive.Destination())
+				}
+				if err := state.Save(); err != nil {
+					log.Error("saving archive state", "err", err)
+				}
+			}
 		}
 		d, snaps := newDrive(cfg, log, state)
 		// Keep serving the API if the drive can't start, so the problem can
@@ -133,17 +154,23 @@ func run() error {
 		} else {
 			lib := clips.NewLibrary(clipSnapshots(snaps))
 			api.Drive, api.Snapshots, api.Clips = d, snaps, lib
+			// The Car page works before archiving is set up, so the setup
+			// wizard can pair; keeping the car awake needs archiving.
+			var car *keepawake.Car
+			if cfg.KeepAwake.Enabled {
+				car = &keepawake.Car{
+					Command: cfg.KeepAwake.Command, Dir: cfg.KeepAwake.KeyDir, ConfigVIN: cfg.KeepAwake.VIN,
+					Runner: system.Exec{Log: log},
+				}
+				api.Car = car
+			}
 			if state != nil {
 				if a, err := newArchiver(cfg, lib, d, state, log); err != nil {
 					log.Error("archiving disabled", "err", err)
 				} else {
 					api.Archive = a
 					go a.Run(ctx)
-					if cfg.KeepAwake.Enabled {
-						car := &keepawake.Car{
-							Command: cfg.KeepAwake.Command, Dir: cfg.KeepAwake.KeyDir, ConfigVIN: cfg.KeepAwake.VIN,
-							Runner: system.Exec{Log: log},
-						}
+					if car != nil {
 						k := &keepawake.KeepAwake{
 							Car:      car,
 							Interval: time.Duration(cfg.KeepAwake.Interval),
@@ -152,7 +179,7 @@ func run() error {
 							Busy:     func() bool { return a.Status().CatchingUp },
 							Log:      log,
 						}
-						api.Car, api.KeepAwake = car, k
+						api.KeepAwake = k
 						if _, paired := car.Paired(); paired {
 							log.Info("keeping the car awake while archiving what it recorded away", "vin", car.VIN(), "every", k.Interval, "max", k.Max)
 						} else {
@@ -169,9 +196,22 @@ func run() error {
 		log.Info("drive disabled in config")
 	}
 
+	wifiMgr := wifi.New(system.Exec{Log: log}, log)
+	if cfg.System.SetupNetwork {
+		wifiMgr.SetCountry = provision.New(system.Exec{Log: log}, log).SetWiFiCountry
+		// set up by hand, before the wizard existed
+		wifiMgr.SetupDone = func() bool { return cfg.Archive.Enabled }
+		api.WiFi = wifiMgr
+	}
+	handler := api.Handler()
+	if cfg.System.SetupNetwork {
+		wifiMgr.Portal = handler
+		go wifiMgr.Run(ctx)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Web.Listen,
-		Handler:           api.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -205,6 +245,14 @@ func newDrive(cfg config.Config, log *slog.Logger, state *archive.State) (*drive
 		time.Duration(cfg.Snapshots.Interval), int64(cfg.Snapshots.MinFree),
 		g, snaps, runner, log)
 	d.KeepFreePercent = cfg.Drive.KeepFreePercent
+	for name, x := range map[string]config.ExtraDriveConfig{drive.Music: cfg.Drive.Music, drive.LightShow: cfg.Drive.LightShow, drive.Boombox: cfg.Drive.Boombox} {
+		if x.Size > 0 {
+			extra, _ := drive.NewExtra(name, int64(x.Size), x.Source)
+			d.Extras = append(d.Extras, extra)
+		}
+	}
+	// in the order the car sees them
+	slices.SortFunc(d.Extras, func(a, b drive.Extra) int { return drive.Order(a.Name) - drive.Order(b.Name) })
 	if state != nil {
 		d.Archived = state.Done
 	}
@@ -212,18 +260,9 @@ func newDrive(cfg config.Config, log *slog.Logger, state *archive.State) (*drive
 }
 
 func newArchiver(cfg config.Config, lib *clips.Library, d *drive.Drive, st *archive.State, log *slog.Logger) (*archive.Archiver, error) {
-	user, password, domain, err := archive.ReadCredentials(cfg.Archive.Credentials)
-	if err != nil {
-		return nil, fmt.Errorf("reading archive credentials: %w", err)
-	}
-	dialect, err := archive.ParseDialect(cfg.Archive.SMBVersion)
+	target, err := archive.NewTarget(cfg.Archive, archiveOptions(log))
 	if err != nil {
 		return nil, err
-	}
-	target := &archive.SMB{
-		Server: cfg.Archive.Server, Share: cfg.Archive.Share, Folder: cfg.Archive.Folder,
-		User: user, Password: password, Domain: domain,
-		Dialect: dialect, Parallel: cfg.Archive.Parallel,
 	}
 	a := archive.New(target, lib, d, st, log)
 	a.Sentry, a.Saved, a.Recent = cfg.Archive.Sentry, cfg.Archive.Saved, cfg.Archive.Recent
@@ -231,8 +270,16 @@ func newArchiver(cfg config.Config, lib *clips.Library, d *drive.Drive, st *arch
 	a.CheckInterval = time.Duration(cfg.Archive.CheckInterval)
 	a.RescanInterval = time.Duration(cfg.Archive.RescanInterval)
 	a.OnResult = func(r archive.Result) { log.Info(r.Summary()) }
-	log.Info("archiving enabled", "target", target, "user", user, "smb", cfg.Archive.SMBVersion, "parallel", cfg.Archive.Parallel)
+	if len(d.Extras) > 0 {
+		a.SyncDrives = func(ctx context.Context) { d.SyncExtras(ctx, target.Mirror) }
+	}
+	log.Info("archiving enabled", "type", cfg.Archive.Type, "target", target)
 	return a, nil
+}
+
+// archiveOptions are what archive targets need from the system.
+func archiveOptions(log *slog.Logger) archive.Options {
+	return archive.Options{Runner: system.Exec{Log: log}, RunDir: "/run/glovebox"}
 }
 
 // clipSnapshots lists the snapshot manager's snapshots for the clip library.

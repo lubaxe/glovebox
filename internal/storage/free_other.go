@@ -13,3 +13,8 @@ func DiskSpace(string) (total, free int64, err error) {
 func FreeBytes(string) (int64, error) {
 	return 0, errors.ErrUnsupported
 }
+
+// Allocated is only supported on Linux.
+func Allocated(string) (int64, error) {
+	return 0, errors.ErrUnsupported
+}

@@ -192,12 +192,6 @@ func TestApplyBadFileLeavesNote(t *testing.T) {
 	}
 }
 
-func TestKeyfileEscape(t *testing.T) {
-	if got := keyfileEscape(` lead\back` + "\nnew"); got != `\slead\\back\nnew` {
-		t.Errorf("got %q", got)
-	}
-}
-
 func TestUnblockRadios(t *testing.T) {
 	root := t.TempDir()
 	for name, v := range map[string][2]string{
@@ -229,5 +223,33 @@ func TestShippedTemplateIsInert(t *testing.T) {
 		if !cfg.Drive.Enabled || cfg.Archive.Enabled {
 			t.Errorf("%s: defaults should have the drive on and archiving off", name)
 		}
+	}
+}
+
+func TestApplyMovesRcloneConfig(t *testing.T) {
+	p, _ := newProvisioner(t)
+	write(t, p.Root, bootFile, "[archive]\ntype = \"rclone\"\n")
+	write(t, p.Root, "/boot/firmware/rclone.conf", "[gdrive]\ntype = drive\ntoken = secret\n")
+	if _, err := p.Apply(context.Background(), bootFile, etcFile); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, p.Root, "/etc/glovebox/rclone.conf"); !strings.Contains(got, "token = secret") {
+		t.Errorf("rclone.conf = %q", got)
+	}
+	if exists(p.Root, "/boot/firmware/rclone.conf") {
+		t.Error("the boot partition's rclone.conf (with tokens) should be gone")
+	}
+}
+
+func TestWiFiCountryWithoutCmdline(t *testing.T) {
+	p, r := newProvisioner(t)
+	if err := os.Remove(filepath.Join(p.Root, "boot", "firmware", "cmdline.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetWiFiCountry(context.Background(), "CA"); err != nil {
+		t.Errorf("not a Raspberry Pi: err = %v", err)
+	}
+	if !strings.Contains(strings.Join(r.Commands(), "\n"), "iw reg set CA") {
+		t.Errorf("commands: %v", r.Commands())
 	}
 }

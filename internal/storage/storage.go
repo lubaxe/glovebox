@@ -15,8 +15,9 @@ import (
 
 // CreateDiskImage creates a sparse disk image of size bytes at path with an
 // MBR partition table and one exFAT partition labelled label, containing an
-// empty TeslaCam folder. It refuses to overwrite an existing file.
-func CreateDiskImage(ctx context.Context, r system.Runner, path string, size int64, label string) (err error) {
+// empty folder (e.g. TeslaCam; "" for none). It refuses to overwrite an
+// existing file.
+func CreateDiskImage(ctx context.Context, r system.Runner, path string, size int64, label, folder string) (err error) {
 	size -= size % (1 << 20) // whole MiB
 	table, err := mbr(size, partTypeExFAT)
 	if err != nil {
@@ -61,7 +62,10 @@ func CreateDiskImage(ctx context.Context, r system.Runner, path string, size int
 		return fmt.Errorf("formatting %s: %w", path, err)
 	}
 
-	// The car needs a TeslaCam folder to record into.
+	if folder == "" {
+		return nil
+	}
+	// e.g. the car needs a TeslaCam folder to record into
 	mnt, err := os.MkdirTemp("", "glovebox-newdisk-")
 	if err != nil {
 		return err
@@ -70,12 +74,12 @@ func CreateDiskImage(ctx context.Context, r system.Runner, path string, size int
 	if _, err := r.Run(ctx, "mount", "-t", "exfat", part, mnt); err != nil {
 		return fmt.Errorf("mounting new disk image: %w", err)
 	}
-	mkErr := os.Mkdir(filepath.Join(mnt, "TeslaCam"), 0o755)
+	mkErr := os.Mkdir(filepath.Join(mnt, folder), 0o755)
 	if _, err := r.Run(ctx, "umount", mnt); err != nil {
 		return fmt.Errorf("unmounting new disk image: %w", err)
 	}
 	if mkErr != nil {
-		return fmt.Errorf("creating TeslaCam folder: %w", mkErr)
+		return fmt.Errorf("creating %s folder: %w", folder, mkErr)
 	}
 	return nil
 }

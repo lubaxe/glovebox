@@ -46,7 +46,7 @@ func (s *Server) carRoutes(mux *http.ServeMux) {
 func (s *Server) needCar(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.Car == nil {
-			http.Error(w, "keep-awake is off (keep_awake.enabled in the config) or archiving isn't set up", http.StatusServiceUnavailable)
+			http.Error(w, "keep-awake is off (keep_awake.enabled in the config) or the drive isn't running", http.StatusServiceUnavailable)
 			return
 		}
 		if r.Method != http.MethodGet && r.Header.Get("Content-Type") != "application/json" {

@@ -166,6 +166,7 @@ function nasState() {
   const a = status.archive;
   if (!a) return { text: 'Backup off', state: '', detail: 'NAS backup isn\'t set up.' };
   if (a.state === 'archiving') return { text: `Backing up ${a.done}/${a.total}`, state: 'warn', detail: a.current || '' };
+  if (a.state === 'syncing') return { text: 'Syncing drives', state: 'warn', detail: `Copying music, light shows and Boombox sounds from ${a.target}` };
   if (a.state === 'home') return { text: 'Backed up', state: a.last?.error ? 'bad' : 'ok', detail: a.last?.error || `Everything is on ${a.target}.` };
   return { text: 'Away from home', state: '', detail: `${a.target} isn't reachable.` };
 }
@@ -230,13 +231,22 @@ function renderOverviewStats() {
     }
     cards.push(stat(n.state, 'cloud', 'NAS backup', n.text, sub, extra));
   } else {
-    cards.push(stat('', 'cloud', 'NAS backup', 'Not set up', 'Add your NAS in glovebox.toml to copy clips home.'));
+    cards.push(stat('warn', 'cloud', 'NAS backup', 'Not set up', 'Tell Glovebox where to copy clips on the Setup page.', null, '#/setup'));
   }
 
   if (status.drive) {
     const d = status.drive;
     cards.push(stat('', 'disk', 'Snapshot space', `${gb(d.backingfiles_free_bytes)} free`,
       'Older snapshots are cleared automatically when space runs low.'));
+    const extras = d.extras || [];
+    if (extras.length) {
+      const failed = extras.find((x) => x.last_error);
+      const synced = extras.map((x) => x.last_sync).filter(Boolean).sort().pop();
+      let sub = synced ? `Last synced ${ago(new Date(synced))}` : 'Synced when the car gets home';
+      if (failed) sub = `${failed.label.toLowerCase()}: ${failed.last_error}`;
+      cards.push(stat(failed ? 'warn' : '', 'music', 'Extra drives',
+        extras.map((x) => `${x.label[0]}${x.label.slice(1).toLowerCase()} ${gb(x.size_bytes)}`).join(' · '), sub, null, '#/setup'));
+    }
   }
 
   const c = status.car;
@@ -872,6 +882,39 @@ async function showCar() {
   page('car', 'Car', el('div', { class: 'car-layout' }, steps, side));
 }
 
+// ---------- setup ----------
+
+function showSetup() {
+  const box = el('div');
+  page('setup', 'Setup', el('div', { class: 'setup-page' },
+    el('div', { class: 'welcome' },
+      el('div', {},
+        el('h2', {}, 'All settings'),
+        el('p', {}, 'Or let the guided setup walk you through Wi-Fi, backups, extra drives and your car, skipping what\'s already set up.')),
+      el('a', { class: 'btn', href: '#/welcome' }, 'Guided setup')),
+    box));
+  window.GloveboxSetup.mount(box, { onSaved: refreshStatus });
+}
+
+function showWelcome() {
+  const box = el('div', { class: 'setup-page' });
+  page('setup', 'Guided setup', box);
+  window.GloveboxSetup.wizard(box, { onFinish: () => { location.hash = '#/'; refreshStatus(); } });
+}
+
+// The first visit before Glovebox is set up starts the wizard.
+async function firstRun() {
+  if (location.hash && location.hash !== '#/') return false;
+  try {
+    const w = await api('/api/wifi');
+    if (!w.setup_done) {
+      location.hash = '#/welcome'; // routes it
+      return true;
+    }
+  } catch { /* Wi-Fi isn't managed here */ }
+  return false;
+}
+
 // ---------- routing ----------
 
 function route() {
@@ -881,10 +924,12 @@ function route() {
   if (view === 'recent') return showRecent();
   if (KIND[view]) return showEvents(view);
   if (view === 'car') return showCar();
+  if (view === 'setup') return showSetup();
+  if (view === 'welcome') return showWelcome();
   return showOverview();
 }
 
 window.addEventListener('hashchange', route);
-route();
+firstRun().then((moved) => { if (!moved) route(); });
 refreshStatus();
 setInterval(refreshStatus, 10000);

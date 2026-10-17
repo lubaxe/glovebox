@@ -1,5 +1,5 @@
-# glovebox configuration. To change it, put a glovebox.toml on the boot
-# partition (see the commented example there) and restart the Pi; it
-# replaces this file. All settings and defaults: deploy/glovebox.toml in the repo.
+# Glovebox configuration. Change it on the web app's Setup page (or with
+# Guided setup there), which saves it here. All settings and defaults:
+# deploy/glovebox.toml in the Glovebox repository.
 
 # Everything uses its default: the drive is on, archiving is off.

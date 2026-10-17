@@ -17,25 +17,6 @@ import (
 	"github.com/hirochachacha/go-smb2"
 )
 
-// Target is where clips are archived.
-type Target interface {
-	// Reachable checks quickly whether the target answers, which is how
-	// glovebox knows the car is home.
-	Reachable(ctx context.Context) error
-	Connect(ctx context.Context) (Session, error)
-	String() string
-}
-
-// Session is a connection to the target.
-type Session interface {
-	// Size returns the size of remote, or false if it doesn't exist.
-	Size(ctx context.Context, remote string) (int64, bool, error)
-	// Upload writes size bytes from r to remote. The file only appears under
-	// its final name once it's complete and has the expected size.
-	Upload(ctx context.Context, remote string, r io.ReaderAt, size int64) error
-	Close() error
-}
-
 // SMB archives to an SMB share, using a built-in client rather than a
 // kernel mount, which can hang when Wi-Fi drops mid-copy.
 type SMB struct {
@@ -84,22 +65,25 @@ func (t *SMB) addr() string { return net.JoinHostPort(t.Server, "445") }
 
 // Reachable implements Target.
 func (t *SMB) Reachable(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", t.addr())
-	if err != nil {
-		return err
-	}
-	return conn.Close()
+	return dial(ctx, t.addr())
 }
 
 // Connect implements Target.
 func (t *SMB) Connect(ctx context.Context) (Session, error) {
+	sess, share, err := t.mount(ctx, t.Share)
+	if err != nil {
+		return nil, err
+	}
+	return &smbSession{sess: sess, share: share, folder: t.Folder, parallel: max(t.Parallel, 1)}, nil
+}
+
+// mount logs in and opens a share.
+func (t *SMB) mount(ctx context.Context, name string) (*smb2.Session, *smb2.Share, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", t.addr())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	d := &smb2.Dialer{
 		Negotiator: smb2.Negotiator{SpecifiedDialect: t.Dialect},
@@ -108,14 +92,31 @@ func (t *SMB) Connect(ctx context.Context) (Session, error) {
 	sess, err := d.DialContext(dialCtx, conn)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("logging in to %s as %s: %w", t.Server, t.User, err)
+		return nil, nil, fmt.Errorf("logging in to %s as %s: %w", t.Server, t.User, err)
 	}
-	share, err := sess.Mount(t.Share)
+	share, err := sess.Mount(name)
 	if err != nil {
 		_ = sess.Logoff()
-		return nil, fmt.Errorf("opening share %s: %w", t.Share, err)
+		return nil, nil, fmt.Errorf("opening share %s: %w", name, err)
 	}
-	return &smbSession{sess: sess, share: share, folder: t.Folder, parallel: max(t.Parallel, 1)}, nil
+	return sess, share, nil
+}
+
+// Mirror implements Target. source is "share" or "share/folder".
+func (t *SMB) Mirror(ctx context.Context, source, dir string) error {
+	name, folder, _ := strings.Cut(strings.Trim(source, "/"), "/")
+	if name == "" {
+		return fmt.Errorf("no share in %q", source)
+	}
+	sess, share, err := t.mount(ctx, name)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = share.Umount()
+		_ = sess.Logoff()
+	}()
+	return mirrorFS(ctx, share.WithContext(ctx).DirFS(folder), dir)
 }
 
 type smbSession struct {
@@ -184,6 +185,10 @@ func (s *smbSession) Upload(ctx context.Context, remote string, r io.ReaderAt, s
 		return fmt.Errorf("renaming %s: %w", tmp, err)
 	}
 	return nil
+}
+
+func (s *smbSession) Remove(ctx context.Context, remote string) error {
+	return s.share.WithContext(ctx).Remove(s.full(remote))
 }
 
 func (s *smbSession) Close() error {

@@ -134,3 +134,23 @@ func TestDisableWhenMissing(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestEjectAndLoad(t *testing.T) {
+	g, _ := testGadget(t)
+	if err := g.Enable(context.Background(), []LUN{{File: "/b/cam_disk.bin", Product: "CAM"}, {File: "/b/music_disk.bin", Product: "MUSIC"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Eject(1); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(g.lunDir(1), "forced_eject")); got != "1" {
+		t.Errorf("forced_eject = %q", got)
+	}
+	if err := g.Load(1, "/b/music_disk.bin"); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := g.State()
+	if len(st.Files) != 2 || st.Files[1] != "/b/music_disk.bin" {
+		t.Errorf("files = %v", st.Files)
+	}
+}

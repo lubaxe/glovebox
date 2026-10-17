@@ -15,6 +15,10 @@ Type=simple
 # Runs as root: it manages the USB gadget, loop devices and mounts.
 ExecStart=/usr/local/bin/glovebox -config /etc/glovebox/glovebox.toml
 Restart=on-failure
+# /run/glovebox: mount points (snapshots, NFS) and sockets; kept when the
+# service stops, so systemd never tries to delete a mounted snapshot
+RuntimeDirectory=glovebox
+RuntimeDirectoryPreserve=yes
 RestartSec=5
 
 [Install]

@@ -27,6 +27,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/lubaxe/glovebox/internal/config"
 	"github.com/lubaxe/glovebox/internal/system"
+	"github.com/lubaxe/glovebox/internal/wifi"
 )
 
 // Provisioner applies the boot partition's configuration.
@@ -74,7 +75,7 @@ func (p *Provisioner) Apply(ctx context.Context, bootFile, etcFile string) (bool
 		done = append(done, "hostname "+s.Hostname)
 	}
 	if s.WiFiCountry != "" {
-		if err := p.setWiFiCountry(ctx, s.WiFiCountry); err != nil {
+		if err := p.SetWiFiCountry(ctx, s.WiFiCountry); err != nil {
 			return false, err
 		}
 		done = append(done, "Wi-Fi country "+s.WiFiCountry)
@@ -91,12 +92,23 @@ func (p *Provisioner) Apply(ctx context.Context, bootFile, etcFile string) (bool
 		}
 		done = append(done, "SSH key for "+p.LoginUser)
 	}
-	if cfg.Archive.Username != "" {
-		creds := fmt.Sprintf("username=%s\npassword=%s\n", cfg.Archive.Username, cfg.Archive.Password)
-		if err := writeFile(p.path(cfg.Archive.Credentials), []byte(creds), 0o600); err != nil {
+	if a := cfg.Archive.SMB; a.Username != "" {
+		creds := fmt.Sprintf("username=%s\npassword=%s\n", a.Username, a.Password)
+		if err := writeFile(p.path(a.Credentials), []byte(creds), 0o600); err != nil {
 			return false, err
 		}
-		done = append(done, "NAS login for "+cfg.Archive.Username)
+		done = append(done, "NAS login for "+a.Username)
+	}
+	// An rclone.conf next to glovebox.toml defines the rclone remotes.
+	rclone := filepath.Join(filepath.Dir(p.path(bootFile)), "rclone.conf")
+	if b, err := os.ReadFile(rclone); err == nil {
+		if err := writeFile(p.path(cfg.Archive.Rclone.Config), b, 0o600); err != nil {
+			return false, err
+		}
+		if err := os.Remove(rclone); err != nil {
+			return false, err
+		}
+		done = append(done, "rclone config")
 	}
 
 	// Keep everything but the secrets. The Wi-Fi network goes with its
@@ -104,7 +116,7 @@ func (p *Provisioner) Apply(ctx context.Context, bootFile, etcFile string) (bool
 	// wouldn't pass validation when the stored config is loaded.
 	stored := cfg
 	stored.System.WiFiSSID, stored.System.WiFiPassword = "", ""
-	stored.Archive.Username, stored.Archive.Password = "", ""
+	stored.Archive.SMB.Username, stored.Archive.SMB.Password = "", ""
 	var buf bytes.Buffer
 	buf.WriteString("# Applied from the boot partition's glovebox.toml on " + p.Now().Format(time.RFC1123) + ".\n")
 	buf.WriteString("# Secrets were moved to root-only files.\n\n")
@@ -157,11 +169,17 @@ func (p *Provisioner) setHostname(ctx context.Context, name string) error {
 	return nil
 }
 
-// setWiFiCountry sets the regulatory domain for this boot and in
+// SetWiFiCountry sets the regulatory domain for this boot and in
 // cmdline.txt for later boots.
-func (p *Provisioner) setWiFiCountry(ctx context.Context, cc string) error {
+func (p *Provisioner) SetWiFiCountry(ctx context.Context, cc string) error {
 	cmdline := p.path("/boot/firmware/cmdline.txt")
 	b, err := os.ReadFile(cmdline)
+	if errors.Is(err, fs.ErrNotExist) {
+		// not a Raspberry Pi: set it for this boot; NetworkManager and the
+		// board's own settings decide later boots
+		_, _ = p.Runner.Run(ctx, "iw", "reg", "set", cc)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -182,44 +200,13 @@ func (p *Provisioner) setWiFiCountry(ctx context.Context, cc string) error {
 
 // setWiFi writes a NetworkManager connection, readable only by root.
 func (p *Provisioner) setWiFi(ctx context.Context, ssid, password string) error {
-	conn := strings.Join([]string{
-		"[connection]",
-		"id=glovebox-wifi",
-		"type=wifi",
-		"autoconnect=true",
-		"",
-		"[wifi]",
-		"mode=infrastructure",
-		"ssid=" + keyfileEscape(ssid),
-		"",
-		"[wifi-security]",
-		"key-mgmt=wpa-psk",
-		"psk=" + keyfileEscape(password),
-		"",
-		"[ipv4]",
-		"method=auto",
-		"",
-		"[ipv6]",
-		"method=auto",
-		"",
-	}, "\n")
-	name := p.path("/etc/NetworkManager/system-connections/glovebox-wifi.nmconnection")
-	if err := writeFile(name, []byte(conn), 0o600); err != nil {
+	name := p.path("/etc/NetworkManager/system-connections/" + wifi.ClientConnection + ".nmconnection")
+	if err := wifi.WriteClient(name, ssid, password); err != nil {
 		return err
 	}
 	// NetworkManager may not be running yet; it reads the file when it starts
 	_, _ = p.Runner.Run(ctx, "nmcli", "connection", "reload")
 	return nil
-}
-
-// keyfileEscape escapes a value for a GKeyFile (NetworkManager keyfile).
-func keyfileEscape(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\t", `\t`, "\r", `\r`)
-	s = r.Replace(s)
-	if strings.HasPrefix(s, " ") {
-		s = `\s` + s[1:]
-	}
-	return s
 }
 
 func (p *Provisioner) addSSHKey(key string) error {

@@ -74,13 +74,13 @@ button:disabled { opacity: .55; cursor: default; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn-primary:hover { background: #d63530; border-color: #d63530; }
 .btn-quiet { background: none; }
-select, input[type=text] {
+select, input[type=text], input[type=password], input[type=number], textarea {
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 9px 12px;
 }
-input[type=text]:focus, select:focus, button:focus-visible, a:focus-visible {
+input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, textarea:focus, select:focus, button:focus-visible, a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -484,6 +484,46 @@ a.stat:hover { border-color: var(--faint); }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; font-weight: 550; }
 
+/* ---------- setup page ---------- */
+
+.setup-page { max-width: 860px; }
+[hidden] { display: none !important; }
+.welcome { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+.welcome h2 { margin: 0 0 4px; font-size: 22px; }
+.welcome .btn, .welcome button { white-space: nowrap; }
+.welcome p { margin: 0; color: var(--muted); }
+.type-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.type-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  padding: 12px 14px; background: var(--surface-2);
+}
+.type-card span { color: var(--muted); font-size: 13px; font-weight: 400; }
+.type-card.selected { border-color: var(--accent); background: var(--accent-soft); }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 14px; margin: 4px 0 12px; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field-label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.field-hint { font-size: 12.5px; color: var(--faint); }
+.field input, .field select { width: 100%; }
+textarea { width: 100%; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13px; resize: vertical; }
+.check { display: flex; gap: 9px; align-items: flex-start; margin: 6px 0; cursor: pointer; }
+.check input { margin-top: 4px; accent-color: var(--accent); }
+.advanced { margin: 4px 0 12px; }
+.advanced > summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+.keybox, .conf { margin: 4px 0 12px; }
+.keybox p, .conf p { margin: 0 0 8px; }
+.pubkey {
+  white-space: pre-wrap; word-break: break-all; font-size: 12.5px; margin: 0 0 8px;
+  padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.check-steps .result { margin-top: 6px; }
+.result .mark { width: 18px; text-align: center; font-weight: 700; }
+.drive-list { display: flex; flex-direction: column; gap: 14px; }
+.drive-row { padding-top: 12px; border-top: 1px solid var(--line); }
+.drive-row:first-child { padding-top: 0; border-top: none; }
+.drive-row h4 { margin: 0 0 2px; font-size: 15px; }
+.drive-row p { margin: 0 0 8px; font-size: 14px; }
+.drive-row.off .field:last-child { opacity: .5; }
+
 /* ---------- phones ---------- */
 
 @media (max-width: 860px) {
@@ -511,4 +551,6 @@ a.stat:hover { border-color: var(--faint); }
   .stat-value { font-size: 18px; }
   .topbar .chips { display: none; }
   .minute-row { grid-template-columns: 1fr; }
+  .type-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .type-card span { font-size: 12px; }
 }

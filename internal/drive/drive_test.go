@@ -19,17 +19,40 @@ import (
 )
 
 type fakeGadget struct {
-	state   gadget.State
-	enabled [][]gadget.LUN
+	state    gadget.State
+	enabled  [][]gadget.LUN
+	disabled int
+	ejected  []int
+	loaded   []string
 }
 
 func (g *fakeGadget) Enable(_ context.Context, luns []gadget.LUN) error {
 	g.enabled = append(g.enabled, luns)
 	g.state.Enabled = true
+	g.state.Files = nil
+	for _, l := range luns {
+		g.state.Files = append(g.state.Files, l.File)
+	}
 	return nil
 }
 
 func (g *fakeGadget) State() (gadget.State, error) { return g.state, nil }
+
+func (g *fakeGadget) Disable(context.Context) error {
+	g.disabled++
+	g.state = gadget.State{}
+	return nil
+}
+
+func (g *fakeGadget) Eject(lun int) error {
+	g.ejected = append(g.ejected, lun)
+	return nil
+}
+
+func (g *fakeGadget) Load(lun int, file string) error {
+	g.loaded = append(g.loaded, file)
+	return nil
+}
 
 type fakeSnaps struct {
 	mu       sync.Mutex
@@ -79,7 +102,7 @@ func newDrive(t *testing.T) (*Drive, *fakeGadget, *fakeSnaps, *calls) {
 	d := New(t.TempDir(), 8<<30, time.Hour, 1<<30, g, s, &system.FakeRunner{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.checkReflink = func(string) error { return nil }
-	d.createImage = func(_ context.Context, _ system.Runner, path string, _ int64, _ string) error {
+	d.createImage = func(_ context.Context, _ system.Runner, path string, _ int64, _, _ string) error {
 		c.created = append(c.created, path)
 		return os.WriteFile(path, nil, 0o644)
 	}
@@ -131,7 +154,7 @@ func TestStartLeavesConnectedDriveAlone(t *testing.T) {
 	if err := os.WriteFile(d.CamDisk(), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	g.state = gadget.State{Enabled: true, HostState: "configured"}
+	g.state = gadget.State{Enabled: true, HostState: "configured", Files: []string{d.CamDisk()}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := d.Start(ctx); err != nil {
@@ -252,7 +275,7 @@ func TestCamDiskSize(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d, _, _, _ := newDrive(t)
 			var gotSize int64
-			d.createImage = func(_ context.Context, _ system.Runner, path string, size int64, _ string) error {
+			d.createImage = func(_ context.Context, _ system.Runner, path string, size int64, _, _ string) error {
 				gotSize = size
 				return os.WriteFile(path, nil, 0o644)
 			}

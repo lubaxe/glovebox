@@ -40,6 +40,7 @@ const (
 	Away      = "away"      // target unreachable
 	Home      = "home"      // reachable, nothing to do
 	Archiving = "archiving" // uploading
+	Syncing   = "syncing"   // updating the extra drives
 )
 
 // Result summarizes one archiving run.
@@ -87,6 +88,10 @@ type Archiver struct {
 
 	// OnResult, if set, is called after each run that had something to do.
 	OnResult func(Result)
+	// SyncDrives, if set, updates the extra drives from the target. It runs
+	// after the first archiving run once the car is home, and after runs
+	// asked for with Trigger.
+	SyncDrives func(ctx context.Context)
 
 	trigger chan struct{}
 	mu      sync.Mutex
@@ -127,6 +132,7 @@ func (a *Archiver) Status() Status {
 func (a *Archiver) Run(ctx context.Context) {
 	home := false
 	catchUp := false
+	syncDrives := false
 	var lastRun time.Time
 	for {
 		triggered := false
@@ -147,12 +153,18 @@ func (a *Archiver) Run(ctx context.Context) {
 				}
 				lastRun = time.Time{}
 				catchUp = true
+				syncDrives = true
 			}
 			if time.Since(lastRun) >= a.RescanInterval {
 				a.setCatchingUp(catchUp)
 				a.run(ctx)
 				a.setCatchingUp(false)
 				catchUp = false
+				if syncDrives && a.SyncDrives != nil && ctx.Err() == nil {
+					a.setState(Syncing)
+					a.SyncDrives(ctx)
+				}
+				syncDrives = false
 				lastRun = time.Now()
 				a.setState(Home)
 			}
@@ -166,6 +178,7 @@ func (a *Archiver) Run(ctx context.Context) {
 		}
 		if triggered {
 			lastRun = time.Time{}
+			syncDrives = true
 		}
 	}
 }
@@ -351,7 +364,8 @@ func isConnErr(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	for _, s := range []string{"connection reset", "broken pipe", "i/o timeout", "use of closed", "EOF", "no route to host", "network is unreachable"} {
+	for _, s := range []string{"connection reset", "broken pipe", "i/o timeout", "use of closed", "EOF", "no route to host", "network is unreachable",
+		"input/output error", "stale file handle", "host is down"} { // the last ones: NFS
 		if strings.Contains(msg, s) {
 			return true
 		}

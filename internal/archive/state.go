@@ -17,10 +17,13 @@ type State struct {
 	path  string
 	mu    sync.Mutex
 	files map[string]int64
+	// target is where the files went (see config.ArchiveConfig.Destination)
+	target string
 }
 
 type stateFile struct {
-	Files map[string]int64 `json:"files"`
+	Target string           `json:"target,omitempty"`
+	Files  map[string]int64 `json:"files"`
 }
 
 // ErrStateReset is returned with an empty State when the state file was
@@ -46,6 +49,7 @@ func LoadState(path string) (*State, error) {
 	if f.Files != nil {
 		s.files = f.Files
 	}
+	s.target = f.Target
 	return s, nil
 }
 
@@ -86,7 +90,7 @@ func (s *State) Count() int {
 // Save writes the state atomically.
 func (s *State) Save() error {
 	s.mu.Lock()
-	b, err := json.Marshal(stateFile{Files: s.files})
+	b, err := json.Marshal(stateFile{Target: s.target, Files: s.files})
 	s.mu.Unlock()
 	if err != nil {
 		return err
@@ -119,4 +123,19 @@ func (s *State) Save() error {
 		d.Close()
 	}
 	return nil
+}
+
+// UseTarget says where files are archived to. If the state is for another
+// target, it starts over: nothing is on the new one yet, so nothing may be
+// skipped or deleted from the car's drive as archived. It reports whether
+// it started over. A state from before targets were recorded is kept.
+func (s *State) UseTarget(target string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	reset := s.target != "" && s.target != target && len(s.files) > 0
+	if reset {
+		s.files = map[string]int64{}
+	}
+	s.target = target
+	return reset
 }

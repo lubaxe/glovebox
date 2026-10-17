@@ -80,7 +80,7 @@ func TestCreateDiskImageRefusesExisting(t *testing.T) {
 	if err := os.WriteFile(path, []byte("keep me"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := CreateDiskImage(context.Background(), &system.FakeRunner{}, path, 64<<20, "CAM")
+	err := CreateDiskImage(context.Background(), &system.FakeRunner{}, path, 64<<20, "CAM", "TeslaCam")
 	if !errors.Is(err, os.ErrExist) {
 		t.Fatalf("err = %v, want ErrExist", err)
 	}
@@ -97,7 +97,7 @@ func TestCreateDiskImageCleansUpOnFailure(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	if err := CreateDiskImage(context.Background(), r, path, 64<<20, "CAM"); err == nil {
+	if err := CreateDiskImage(context.Background(), r, path, 64<<20, "CAM", "TeslaCam"); err == nil {
 		t.Fatal("want an error")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {

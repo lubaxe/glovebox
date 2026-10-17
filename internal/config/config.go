@@ -40,6 +40,10 @@ type SystemConfig struct {
 	WiFiCountry string `toml:"wifi_country"`
 	// SSHKey is a public key allowed to log in over SSH.
 	SSHKey string `toml:"ssh_key"`
+	// SetupNetwork offers an open Wi-Fi network, Glovebox-XXXX, whose
+	// sign-in page runs the setup wizard, until the Pi has joined Wi-Fi and
+	// the wizard is finished.
+	SetupNetwork bool `toml:"setup_network"`
 }
 
 // DriveConfig controls the disk image presented to the car.
@@ -59,37 +63,31 @@ type DriveConfig struct {
 	// Sentry and Saved events are deleted from it (oldest first) until this
 	// much of it is free. Events that aren't archived are never deleted.
 	KeepFreePercent int `toml:"keep_free_percent"`
+	// Music, LightShow and Boombox are extra drives for the car. Each one is
+	// off while its size is 0.
+	Music     ExtraDriveConfig `toml:"music"`
+	LightShow ExtraDriveConfig `toml:"lightshow"`
+	Boombox   ExtraDriveConfig `toml:"boombox"`
 }
 
-// ArchiveConfig controls copying clips to a NAS when the car is home.
-type ArchiveConfig struct {
-	Enabled bool   `toml:"enabled"`
-	Server  string `toml:"server"` // SMB server, e.g. "192.168.1.10"
-	Share   string `toml:"share"`
-	Folder  string `toml:"folder"` // optional folder inside the share
-	// Credentials is a root-only file with username= and password= lines.
-	Credentials string `toml:"credentials"`
-	// Username and Password may be given in the boot partition's
-	// glovebox.toml; at first boot they're moved into Credentials.
-	Username string `toml:"username"`
-	Password string `toml:"password"`
+// Extras returns the extra drives by name: music, lightshow, boombox.
+func (d DriveConfig) Extras() map[string]ExtraDriveConfig {
+	return map[string]ExtraDriveConfig{"music": d.Music, "lightshow": d.LightShow, "boombox": d.Boombox}
+}
 
-	Sentry bool `toml:"sentry"`
-	Saved  bool `toml:"saved"`
-	Recent bool `toml:"recent"`
-
-	// SMBVersion pins the SMB version: "2.1" (fastest on a Pi Zero 2 W),
-	// "3.0", "3.0.2", "3.1.1", or "" to negotiate the highest.
-	SMBVersion string `toml:"smb_version"`
-	// Parallel is how many writes are in flight per file.
-	Parallel int `toml:"parallel"`
-
-	// HomeDelay is how long the NAS must be reachable before archiving.
-	HomeDelay Duration `toml:"home_delay"`
-	// CheckInterval is how often to check whether the NAS is reachable.
-	CheckInterval Duration `toml:"check_interval"`
-	// RescanInterval is how often to look for new clips while home.
-	RescanInterval Duration `toml:"rescan_interval"`
+// ExtraDriveConfig is an extra drive the car reads but doesn't record to.
+// Its files mirror a folder on the archive target: whenever the car is
+// home, Glovebox syncs it and, if anything changed, briefly ejects the
+// drive to swap in the new version.
+type ExtraDriveConfig struct {
+	// Size turns the drive on. Changing it recreates the drive, which is
+	// then filled again from Source.
+	Size ByteSize `toml:"size"`
+	// Source is the folder on the archive target to mirror: for SMB
+	// "share/folder" (a share, optionally with a folder in it), for NFS an
+	// export path, for rsync a path on the server, for rclone a path on the
+	// archive remote or a whole "remote:path". Empty means nothing syncs.
+	Source string `toml:"source"`
 }
 
 // KeepAwakeConfig keeps the car from sleeping, and cutting the Pi's power,
@@ -148,7 +146,7 @@ func Default() Config {
 			Interval: Duration(58 * time.Minute),
 			MinFree:  4 << 30,
 		},
-		System: SystemConfig{Hostname: "glovebox"},
+		System: SystemConfig{Hostname: "glovebox", SetupNetwork: true},
 		KeepAwake: KeepAwakeConfig{
 			Enabled:     true,
 			KeyDir:      "/etc/glovebox/ble",
@@ -157,17 +155,7 @@ func Default() Config {
 			MaxDuration: Duration(time.Hour),
 			Cooldown:    Duration(6 * time.Hour),
 		},
-		Archive: ArchiveConfig{
-			Share:          "TeslaCam",
-			Credentials:    "/etc/glovebox/smb-credentials",
-			Sentry:         true,
-			Saved:          true,
-			SMBVersion:     "2.1",
-			Parallel:       4,
-			HomeDelay:      Duration(20 * time.Second),
-			CheckInterval:  Duration(30 * time.Second),
-			RescanInterval: Duration(10 * time.Minute),
-		},
+		Archive: defaultArchive(),
 	}
 }
 
@@ -192,8 +180,9 @@ func LoadFile(path string) (cfg Config, keys int, err error) {
 	if err != nil {
 		return cfg, 0, fmt.Errorf("reading %s: %w", path, err)
 	}
+	cfg.Archive.migrateLegacy(md)
 	for _, k := range md.Keys() {
-		if len(k) > 1 { // a setting, not a [section] header
+		if md.Type(k...) != "Hash" { // a setting, not a [section] header
 			keys++
 		}
 	}
@@ -231,9 +220,11 @@ func (c Config) Validate() error {
 		if time.Duration(c.Snapshots.Interval) < time.Minute {
 			return fmt.Errorf("snapshots.interval must be at least 1m")
 		}
-	}
-	if (c.Archive.Username == "") != (c.Archive.Password == "") {
-		return fmt.Errorf("archive.username and archive.password must be set together")
+		for name, x := range c.Drive.Extras() {
+			if x.Size != 0 && x.Size < 32<<20 {
+				return fmt.Errorf("drive.%s.size must be at least 32M, or 0 for no %s drive", name, name)
+			}
+		}
 	}
 	if err := c.System.Validate(); err != nil {
 		return err
@@ -249,27 +240,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("keep_awake.interval must be at least 10s")
 		}
 	}
-	if c.Archive.Enabled {
-		if !c.Drive.Enabled {
-			return fmt.Errorf("archive.enabled needs drive.enabled")
-		}
-		if c.Archive.Server == "" || c.Archive.Share == "" {
-			return fmt.Errorf("archive.server and archive.share must be set")
-		}
-		if c.Archive.Parallel < 1 || c.Archive.Parallel > 16 {
-			return fmt.Errorf("archive.parallel must be between 1 and 16")
-		}
-		switch c.Archive.SMBVersion {
-		case "", "2.0.2", "2.1", "3.0", "3.0.2", "3.1.1":
-		default:
-			return fmt.Errorf("archive.smb_version %q: use 2.1, 3.0, 3.0.2, 3.1.1 or \"\" to negotiate", c.Archive.SMBVersion)
-		}
-		if !path.IsAbs(c.Archive.Credentials) {
-			return fmt.Errorf("archive.credentials %q must be an absolute path", c.Archive.Credentials)
-		}
-		if time.Duration(c.Archive.CheckInterval) < time.Second || time.Duration(c.Archive.RescanInterval) < time.Minute {
-			return fmt.Errorf("archive.check_interval must be at least 1s and archive.rescan_interval at least 1m")
-		}
+	if c.Archive.Enabled && !c.Drive.Enabled {
+		return fmt.Errorf("archive.enabled needs drive.enabled")
+	}
+	if err := c.Archive.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

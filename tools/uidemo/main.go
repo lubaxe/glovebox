@@ -19,6 +19,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/lubaxe/glovebox/internal/archive"
@@ -26,10 +28,12 @@ import (
 	"github.com/lubaxe/glovebox/internal/drive"
 	"github.com/lubaxe/glovebox/internal/gadget"
 	"github.com/lubaxe/glovebox/internal/keepawake"
+	"github.com/lubaxe/glovebox/internal/setup"
 	"github.com/lubaxe/glovebox/internal/snapshot"
 	"github.com/lubaxe/glovebox/internal/sysinfo"
 	"github.com/lubaxe/glovebox/internal/system"
 	"github.com/lubaxe/glovebox/internal/web"
+	"github.com/lubaxe/glovebox/internal/wifi"
 )
 
 var cameras = []string{"front", "back", "left_repeater", "right_repeater", "left_pillar", "right_pillar"}
@@ -39,6 +43,9 @@ func main() {
 	footage := flag.String("footage", filepath.Join(os.TempDir(), "glovebox-demo"), "where to make the sample footage")
 	state := flag.String("archive", "home", `archive state to show: "home", "archiving" or "away"`)
 	paired := flag.Bool("paired", true, "show the car as paired")
+	extras := flag.Bool("extras", false, "show music and Boombox drives")
+	firstRun := flag.Bool("firstrun", false, "start as a Pi that isn't set up, on its setup network")
+	setupDone := flag.Bool("setupdone", false, "start as a Pi on home Wi-Fi with setup finished, for Guided setup")
 	flag.Parse()
 
 	videos := filepath.Join(*footage, "videos")
@@ -66,8 +73,15 @@ func main() {
 	}
 	s := &web.Server{
 		Version: "demo", Status: fakeStatus{}, Log: logger,
-		Drive: fakeDrive{}, Snapshots: snaps, Clips: lib,
+		Drive: fakeDrive{extras: *extras}, Snapshots: snaps, Clips: lib,
 		Archive: fakeArchive{state: *state}, Car: car, KeepAwake: fakeKeepAwake{},
+		Setup: demoSetup(*footage),
+	}
+	switch {
+	case *firstRun:
+		s.WiFi = &fakeWiFi{}
+	case *setupDone:
+		s.WiFi = &fakeWiFi{done: true, joined: &wifi.JoinResult{SSID: "Springfield Home", OK: true, Address: "192.168.1.50", At: time.Now()}}
 	}
 	log.Printf("serving the demo UI on http://%s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, s.Handler()))
@@ -241,14 +255,23 @@ func (fakeStatus) Read() (sysinfo.Info, error) {
 	}, nil
 }
 
-type fakeDrive struct{}
+type fakeDrive struct{ extras bool }
 
-func (fakeDrive) Status() (drive.Status, error) {
-	return drive.Status{
+func (d fakeDrive) Status() (drive.Status, error) {
+	st := drive.Status{
 		CamDisk: "/backingfiles/cam_disk.bin", CamSize: 52 << 30,
 		Gadget:    gadget.State{Enabled: true, HostState: "configured"},
 		Snapshots: 6, FreeBytes: 31 << 30,
-	}, nil
+		Extras: []drive.ExtraStatus{},
+	}
+	if d.extras {
+		synced := time.Now().Add(-40 * time.Minute)
+		st.Extras = []drive.ExtraStatus{
+			{Name: "music", Label: "MUSIC", Size: 8 << 30, Source: "Music", LastSync: &synced},
+			{Name: "boombox", Label: "BOOMBOX", Size: 256 << 20, Source: "Boombox", LastSync: &synced},
+		}
+	}
+	return st, nil
 }
 func (fakeDrive) TakeSnapshot() {}
 
@@ -275,4 +298,83 @@ type fakeKeepAwake struct{}
 
 func (fakeKeepAwake) Status() keepawake.Status {
 	return keepawake.Status{LastWake: time.Now().Add(-18 * time.Minute), CarState: "AWAKE"}
+}
+
+// demoSetup is a real setup page on a config in dir, with a fake ssh-keygen.
+func demoSetup(dir string) *setup.Setup {
+	// the config wants absolute paths; on Windows, ones on the current drive
+	dir = filepath.ToSlash(strings.TrimPrefix(dir, filepath.VolumeName(dir)))
+	conf := dir + "/glovebox.toml"
+	content := fmt.Sprintf(`[archive]
+enabled = true
+[archive.smb]
+server = "192.168.1.10"
+share = "TeslaCam"
+credentials = "%[1]s/smb-credentials"
+[archive.rsync]
+key = "%[1]s/ssh/id_ed25519"
+known_hosts = "%[1]s/ssh/known_hosts"
+[archive.rclone]
+config = "%[1]s/rclone.conf"
+[drive.music]
+size = "8G"
+source = "Music"
+`, dir)
+	if err := os.WriteFile(conf, []byte(content), 0o600); err != nil {
+		log.Fatal(err)
+	}
+	_ = os.WriteFile(dir+"/smb-credentials", []byte("username=carcam\npassword=demo\n"), 0o600)
+	keygen := &system.FakeRunner{Handler: func(cmd string) ([]byte, error) {
+		f := strings.Fields(cmd)
+		return nil, os.WriteFile(f[len(f)-1]+".pub", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDemoKeyOnlyForTheDemo glovebox@glovebox\n"), 0o644)
+	}}
+	return &setup.Setup{ConfigPath: conf, Runner: keygen, Gateway: func() string { return "192.168.1.1" },
+		Options: archive.Options{Runner: keygen, RunDir: os.TempDir()}}
+}
+
+// fakeWiFi is a Pi on its setup network that joins any network after a
+// moment.
+type fakeWiFi struct {
+	mu     sync.Mutex
+	joined *wifi.JoinResult
+	done   bool
+}
+
+func (f *fakeWiFi) Status(context.Context) wifi.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := wifi.Status{Hostname: "glovebox", SetupDone: f.done, LastJoin: f.joined}
+	if !f.done {
+		st.AccessPoint = "Glovebox-ABCD"
+	}
+	if f.joined != nil && f.joined.OK {
+		st.Connected, st.SSID, st.Address, st.Joined = true, f.joined.SSID, f.joined.Address, true
+	}
+	return st
+}
+
+func (f *fakeWiFi) Scan(context.Context) ([]wifi.Network, error) {
+	time.Sleep(time.Second)
+	return []wifi.Network{{SSID: "Springfield Home", Signal: 78, Secure: true}, {SSID: "Neighbours", Signal: 40, Secure: true}, {SSID: "Cafe", Signal: 22}}, nil
+}
+
+func (f *fakeWiFi) Join(_ context.Context, ssid, password, _ string) wifi.JoinResult {
+	time.Sleep(2 * time.Second)
+	res := wifi.JoinResult{SSID: ssid, At: time.Now()}
+	if password == "wrong password" {
+		res.Error = "couldn't join " + ssid + ": the password was wrong"
+	} else {
+		res.OK, res.Address = true, "192.168.1.50"
+	}
+	f.mu.Lock()
+	f.joined = &res
+	f.mu.Unlock()
+	return res
+}
+
+func (f *fakeWiFi) FinishSetup() error {
+	f.mu.Lock()
+	f.done = true
+	f.mu.Unlock()
+	return nil
 }

@@ -3,11 +3,15 @@
 # Publishes the current commit's files to the public repository as one new
 # commit, without this repository's history.
 #
-# usage: scripts/publish.sh [--release] "commit message"
+# usage: scripts/publish.sh [--release | --branch NAME] "commit message"
 #
 # --release also points the public repository's release branch at the new
 # commit, which makes its CI build the image and publish release
 # v<VERSION>. Bump VERSION first.
+#
+# --branch NAME publishes to that branch instead of main, e.g. "rc" for a
+# release candidate whose image is built by running Build image by hand on
+# that branch, while main and the latest release stay as they are.
 #
 # Setup, once:
 #   git remote add public https://github.com/<owner>/glovebox.git
@@ -17,15 +21,25 @@
 #   inside .git, so it's never committed itself.
 
 release=
-if [ "${1:-}" = --release ]
-then
-  release=1
+branch=main
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    --release) release=1 ;;
+    --branch) branch=${2:?--branch needs a name}; shift ;;
+    *) break ;;
+  esac
   shift
+done
+if [ -n "$release" ] && [ "$branch" != main ]
+then
+  echo "--release publishes from main; leave out --branch"
+  exit 1
 fi
 msg=${1:-}
 if [ -z "$msg" ]
 then
-  sed -n '6p' "$0"
+  sed -n '6p' "$0" | sed 's|^# ||'
   exit 1
 fi
 remote=${PUBLIC_REMOTE:-public}
@@ -60,7 +74,8 @@ then
 fi
 
 git fetch -q "$remote" 2> /dev/null || true
-parent=$(git rev-parse -q --verify "refs/remotes/$remote/main" || true)
+# a new branch starts from main
+parent=$(git rev-parse -q --verify "refs/remotes/$remote/$branch" || git rev-parse -q --verify "refs/remotes/$remote/main" || true)
 commit=$(GIT_AUTHOR_NAME=$name GIT_AUTHOR_EMAIL=$email GIT_COMMITTER_NAME=$name GIT_COMMITTER_EMAIL=$email \
   git commit-tree "HEAD^{tree}" ${parent:+-p "$parent"} -m "$msg")
 if [ -n "$parent" ] && [ -z "$(git diff --name-only "$parent" "$commit")" ]
@@ -68,8 +83,8 @@ then
   echo "nothing new to publish"
   commit=$parent
 else
-  git push "$remote" "$commit:refs/heads/main"
-  echo "published $(git rev-parse --short "$commit") to $remote"
+  git push "$remote" "$commit:refs/heads/$branch"
+  echo "published $(git rev-parse --short "$commit") to $remote $branch"
 fi
 if [ -n "$release" ]
 then

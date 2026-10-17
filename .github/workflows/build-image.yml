@@ -104,6 +104,12 @@ jobs:
           cp "${images[0]}" "$out/glovebox-$GLOVEBOX_VERSION-image.zip"
           cp "$WORKDIR/glovebox" "$out/glovebox-linux-arm64"
           cp "$WORKDIR/tesla-control" "$out/tesla-control-linux-arm64"
+          # 32-bit builds for install.sh on other Pis (ARMv6 runs on every
+          # 32-bit Pi); the image itself is only for the Zero 2 W
+          export GOOS=linux GOARCH=arm GOARM=6 CGO_ENABLED=0
+          go build -trimpath -ldflags "-s -w -X main.version=$GLOVEBOX_VERSION" -o "$out/glovebox-linux-armv6" ./cmd/glovebox
+          (cd "$WORKDIR/vehicle-command" && go build -trimpath -ldflags "-s -w" -o "$out/tesla-control-linux-armv6" ./cmd/tesla-control)
+          unset GOOS GOARCH GOARM CGO_ENABLED
           cp deploy/glovebox.service deploy/glovebox.toml LICENSE THIRD-PARTY-NOTICES.md "$out/"
           cp pi-gen-sources/00-glovebox/files/glovebox-boot.toml "$out/"
           # install.sh fetches this release's files, not whatever is latest
@@ -118,9 +124,9 @@ jobs:
           {
             echo "## Install"
             echo
-            echo "**New card:** flash \`glovebox-$GLOVEBOX_VERSION-image.zip\` with [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (Choose OS > Use custom), then open the card's boot partition and fill in \`glovebox.toml\`: Wi-Fi, NAS, and optionally an SSH key and your VIN. Put the card in the Pi and plug it into the car's glovebox USB port."
+            echo "**New card:** flash \`glovebox-$GLOVEBOX_VERSION-image.zip\` with [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (Choose OS > Use custom), put the card in the Pi and plug it into the car's glovebox USB port. After a couple of minutes, join the **Glovebox-XXXX** Wi-Fi network with your phone: a setup wizard opens for your Wi-Fi, backups, extra drives and car."
             echo
-            echo "**Already running Raspberry Pi OS Lite (64-bit)?** Install without reflashing:"
+            echo "**Already running Raspberry Pi OS Lite (64-bit)?** Install without reflashing, then open http://<the Pi's name>.local:8080 for the same wizard:"
             echo
             echo '```sh'
             echo "curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$GLOVEBOX_VERSION/install.sh | sudo bash"

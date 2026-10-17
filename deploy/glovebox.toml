@@ -1,5 +1,7 @@
-# glovebox configuration. Installed as /etc/glovebox/glovebox.toml.
-# Anything left out uses the default shown here.
+# Every Glovebox setting, with its default. Reference only: the web app's
+# Setup page (and its Guided setup) writes /etc/glovebox/glovebox.toml for
+# you. To set up without the wizard, put any of these in glovebox.toml on the
+# boot partition before first boot. Anything left out uses the default here.
 
 [log]
 # debug, info, warn or error
@@ -26,6 +28,28 @@ max_power_ma = 200
 # that aren't on the NAS yet are never deleted.
 keep_free_percent = 25
 
+# Extra drives for the car: music, a light show and Boombox sounds. Each is
+# off while its size is 0. Its files are copied from source, a folder on the
+# archive target: for SMB "share" or "share/folder", for NFS an export path,
+# for rsync a path on the server, for rclone a folder on the remote (or
+# "remote:folder"). Glovebox updates them whenever the car gets home; only a
+# drive that changed is briefly ejected. Changing a size recreates the drive.
+# Adding or removing one reconnects all the drives when Glovebox restarts.
+[drive.music]
+size = "0"             # e.g. "8G"
+source = ""            # e.g. "Music"
+
+[drive.lightshow]
+# The car looks in the drive's LightShow folder for an .fseq file and an
+# .mp3 or .wav with the same name; source's files go there.
+size = "0"             # e.g. "1G"
+source = ""            # e.g. "LightShow"
+
+[drive.boombox]
+# Sounds (.mp3, .wav) for Boombox; they go in the drive's Boombox folder.
+size = "0"             # e.g. "256M"
+source = ""            # e.g. "Boombox"
+
 [snapshots]
 # How often to snapshot the car's drive.
 interval = "58m"
@@ -35,22 +59,72 @@ interval = "58m"
 min_free = "4G"
 
 [archive]
-# Copy clips to an SMB share whenever the NAS is reachable (the car is home).
+# Copy clips to your NAS (or anywhere else) whenever it's reachable, which
+# means the car is home. The web app's Setup page fills this in, with a
+# connection test.
 enabled = false
+# smb, nfs, rsync or rclone; its settings are in the table of that name.
+type = "smb"
+# A host:port that only answers at home: while it does, the car is home.
+# Empty uses the server below (SMB, NFS, rsync). rclone needs one, e.g. your
+# router: "192.168.1.1:80".
+check_address = ""
+sentry = true
+saved = true
+recent = false         # the car loops through these constantly
+home_delay = "20s"     # must be reachable this long before archiving
+check_interval = "30s" # how often to check whether it's reachable
+rescan_interval = "10m" # how often to look for new clips while home
+
+[archive.smb]
+# An SMB share, through a built-in client (no kernel mount that could hang
+# when the Wi-Fi drops).
 server = ""            # e.g. "192.168.1.10"
 share = "TeslaCam"
 folder = ""            # optional folder inside the share
 # Root-only file with "username=..." and "password=..." lines.
 credentials = "/etc/glovebox/smb-credentials"
-sentry = true
-saved = true
-recent = false         # the car loops through these constantly
 # "2.1" is fastest on a Pi Zero 2 W (no AES/SHA instructions); "" negotiates.
-smb_version = "2.1"
+version = "2.1"
 parallel = 4           # writes in flight per file; 4 fills the Zero 2 W's Wi-Fi
-home_delay = "20s"     # NAS must be reachable this long before archiving
-check_interval = "30s" # how often to check whether the NAS is reachable
-rescan_interval = "10m" # how often to look for new clips while home
+
+[archive.nfs]
+# An NFS export, mounted only while archiving.
+server = ""            # e.g. "192.168.1.10"
+export = ""            # e.g. "/mnt/user/TeslaCam"
+folder = ""            # optional folder inside the export
+# soft: if the NAS goes away mid-copy, calls fail instead of hanging
+options = "vers=3,proto=tcp,nolock,soft,timeo=100,retrans=2"
+
+[archive.rsync]
+# A folder on a server, with rsync over SSH. Glovebox logs in with its own
+# key; the Setup page creates it and shows the line to add to the server
+# user's ~/.ssh/authorized_keys.
+server = ""
+port = 22
+user = ""
+path = ""              # e.g. "/volume1/TeslaCam"
+key = "/etc/glovebox/ssh/id_ed25519"
+known_hosts = "/etc/glovebox/ssh/known_hosts"
+
+[archive.rclone]
+# Any rclone remote: Google Drive, OneDrive, Dropbox, S3, B2, SFTP,
+# WebDAV... Set it up on a computer with "rclone config", then paste the
+# rclone.conf on the Setup page (or put it next to glovebox.toml on the boot
+# partition). Needs check_address above.
+remote = ""            # remote:folder, e.g. "gdrive:TeslaCam"
+config = "/etc/glovebox/rclone.conf"
+flags = ""             # extra rclone flags, e.g. "--bwlimit 2M"
+
+[system]
+# Set up the Pi itself: hostname, Wi-Fi (wifi_ssid, wifi_password,
+# wifi_country) and an SSH key (ssh_key). These are only read from the
+# boot partition's glovebox.toml; see the template there.
+hostname = "glovebox"
+# Until the Pi has joined Wi-Fi, offer an open network, Glovebox-XXXX, whose
+# sign-in page runs the setup wizard. It turns off once the Pi is on Wi-Fi
+# and the wizard is finished (or 30 minutes later).
+setup_network = true
 
 [keep_awake]
 # Keep the car awake over Bluetooth while uploading what it recorded away,

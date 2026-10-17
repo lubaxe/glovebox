@@ -18,11 +18,24 @@ car ──USB──▶ Glovebox presents /backingfiles/cam_disk.bin as a USB dri
 
 On a freshly flashed card Glovebox:
 
-- applies `glovebox.toml` from the boot partition: Wi-Fi, hostname, SSH key and NAS login. Passwords are moved to root-only files, the stored config keeps no secrets, and `glovebox-status.txt` on the boot partition says what was done (or what was wrong with the file).
 - creates the `backingfiles` partition (XFS with reflink) in the card's free space. If that's interrupted, the next start finishes the job.
 - creates the car's drive inside it and presents it over USB.
+- if the Pi isn't on Wi-Fi within two minutes, offers the setup network (below), where a wizard sets up everything else.
 
-To change settings later, put a new `glovebox.toml` on the boot partition and restart the Pi.
+Settings live in `/etc/glovebox/glovebox.toml`, written by the setup page; secrets (the SMB password, Glovebox's SSH key, `rclone.conf`) are in root-only files in `/etc/glovebox`.
+
+The boot partition's `glovebox.toml` is optional, for setting up without the wizard. If it sets anything, it's applied at startup: Wi-Fi, hostname, SSH key and any other setting; an `rclone.conf` next to it becomes `/etc/glovebox/rclone.conf`. Passwords are moved to root-only files, the stored config keeps no secrets, and the file is replaced by `glovebox-status.txt` saying what was done (or what was wrong with it).
+
+## Setup network and first-run wizard
+
+Until the Pi has joined Wi-Fi once (a fresh card without `wifi_ssid`, or a mistyped password), Glovebox offers its own open network, **Glovebox-XXXX** (the end of the Pi's Wi-Fi address), after giving Wi-Fi two minutes to come up. It's a second interface, `ap0`, next to the Wi-Fi client `wlan0`, run by NetworkManager with the Pi at `192.168.66.1` handing out addresses. Its DNS answers every name with the Pi, and Glovebox serves the web app on port 80 there, so phones open it as the network's sign-in page.
+
+- The first visit to the web app, on that network or at home, starts the wizard: Wi-Fi (networks in range, password, country), where backups go (with the connection test), extra drives, and the car's VIN and pairing. It can be run again any time with **Guided setup** on the Setup page, as a walk-through for changing settings: what's set up already (Wi-Fi, backups, extra drives, pairing) is shown folded, with a button to change just that part. On home Wi-Fi it never involves the setup network.
+- Joining Wi-Fi happens while the setup network stays up, so the phone can carry on. The radio uses one channel for both, so the phone may drop off for a moment; the page picks up the result when it's back.
+- Once the Pi has joined Wi-Fi, the setup network stays until the wizard is finished or skipped, for at most 30 minutes, and then never comes back (`/etc/glovebox/wifi-joined`, `/etc/glovebox/setup-done`). A Pi that already backs up is counted as set up.
+- An empty file named `glovebox-setup` on the boot partition brings the setup network back (e.g. after moving house): Glovebox forgets that it joined Wi-Fi and was set up, and deletes the file.
+- `system.setup_network = false` turns all this off.
+- Avahi announces the Pi as `<hostname>.local`, e.g. `http://glovebox.local:8080`.
 
 ## Drive and snapshots
 
@@ -37,7 +50,7 @@ To change settings later, put a new `glovebox.toml` on the boot partition and re
 ## Clip index and web UI
 
 - The index covers Sentry, Saved and Recent clips across every snapshot. Each clip is served from its most complete copy, and clips the car has already deleted stay available from older snapshots.
-- The web UI (`http://<pi>:8080`) has an overview, Sentry, Saved and Recent pages with thumbnails, reasons, city and map links, a player that shows all cameras in sync (clip strip, scrubbing, 1×/2×/4× speed, enlarge a camera, keyboard shortcuts, downloads), and the Car page for Bluetooth pairing.
+- The web UI (`http://<pi>:8080`) has an overview, Sentry, Saved and Recent pages with thumbnails, reasons, city and map links, a player that shows all cameras in sync (clip strip, scrubbing, 1×/2×/4× speed, enlarge a camera, keyboard shortcuts, downloads), the Car page for Bluetooth pairing, and the Setup page for the backup target and extra drives.
 - Tesla's MP4 files don't play in Chromium-based browsers because of their `ctts` box; Glovebox rewrites that box name on the fly while serving, without changing the files.
 - Only indexed clips, thumbnails and `event.json` files can be served; the rest of the drive and the Pi aren't reachable through the media route.
 
@@ -49,11 +62,25 @@ Glovebox indexes them like any other clips but marks them encrypted: the web UI 
 
 ## Backing up to a NAS
 
-- Glovebox checks every 30 seconds whether the NAS answers on port 445. Once it has for 20 seconds, the car is home: Glovebox takes a fresh snapshot and uploads what isn't backed up yet, Sentry first, then Saved, newest event first, so the important footage gets out before the car sleeps and cuts the Pi's power. While home it looks for new clips every 10 minutes.
-- Uploads use a built-in SMB client, not a kernel mount (which can hang when Wi-Fi drops). Each file is written under a temporary `.partial` name, its size checked, then renamed, so a file on the NAS is always complete. Each attempt uses its own temporary name, because a NAS can keep a file locked for hours after the car cuts the power mid-upload.
+The backup target is an SMB share, an NFS export, a folder on a server reached with rsync over SSH, or any rclone remote (`archive.type`). The web UI's Setup page configures it and tests it: it reaches the server, logs in, writes a small `.glovebox-test` file, reads its size back and deletes it.
+
+- Glovebox checks every 30 seconds whether the target answers: the NAS's port (445 for SMB, 2049 for NFS, 22 for SSH), or `archive.check_address` if set. rclone remotes can be anywhere, so they need that address, e.g. the home router. Once it has for 20 seconds, the car is home: Glovebox takes a fresh snapshot and uploads what isn't backed up yet, Sentry first, then Saved, newest event first, so the important footage gets out before the car sleeps and cuts the Pi's power. While home it looks for new clips every 10 minutes.
+- **SMB** uploads use a built-in client, not a kernel mount (which can hang when Wi-Fi drops). Each file is written under a temporary `.partial` name, its size checked, then renamed, so a file on the NAS is always complete. Each attempt uses its own temporary name, because a NAS can keep a file locked for hours after the car cuts the power mid-upload.
+- **NFS** exports are mounted only while backing up, with `soft` so a NAS that goes away makes writes fail instead of hang. Files are written and renamed the same way.
+- **rsync** keeps one SSH connection open per run and shares it between files, since an SSH handshake costs the Pi Zero 2 W about a second. rsync writes to a temporary name and renames it once complete. Glovebox logs in with its own key (`/etc/glovebox/ssh/id_ed25519`, made on the Setup page) and remembers the server's key from the first connection.
+- **rclone** runs as a server on localhost (`rclone rcd`) for the duration of a run and gets one request per file, so it starts and logs in to the remote once. Its config is `/etc/glovebox/rclone.conf`.
 - `/backingfiles/archive-state.json` records each uploaded file and its size: nothing is uploaded twice, an interrupted run resumes, and a clip that was first caught mid-recording is uploaded again once complete. It's written so a power cut can't corrupt it; if it's ever unreadable, Glovebox starts over and skips files already on the share.
-- RecentClips (all driving footage) can be backed up too with `archive.recent = true`. It's off by default: an hour of HW4 driving is roughly 15–20 GB.
+- RecentClips (all driving footage) can be backed up too: tick it in setup (`archive.recent`). It's off by default: an hour of HW4 driving is roughly 15–20 GB.
 - Measured on a Pi Zero 2 W: about 2.5–3.5 MB/s over its 2.4 GHz Wi-Fi, so an hour of HW4 driving takes 1.5–2 hours to copy.
+
+## Music, light show and Boombox drives
+
+Besides the dashcam drive (`CAM`), the car can get up to three more: `MUSIC`, `LIGHTSHOW` and `BOOMBOX` (`[drive.music]`, `[drive.lightshow]`, `[drive.boombox]`), each a sparse exFAT image in `/backingfiles` that's off while its size is 0. They're presented as more drives of the same USB device, after `CAM`.
+
+- Each mirrors a folder on the backup target (`source`). After the first backup run once the car is home, and after a run started from the web UI, Glovebox updates each drive: it makes a copy-on-write clone of the image, brings the clone up to date (new and changed files copied, files gone from the source deleted, Mac and Windows litter skipped), and compares the files before and after.
+- Only if something changed is the new version swapped in: that one drive is ejected (`forced_eject`), the clone renamed over the image, and the drive loaded again. The car sees that drive unplugged and plugged back in; the dashcam drive stays connected throughout. If the copy fails partway, the drive is left as it was.
+- The light show's files go in the drive's `LightShow` folder and the Boombox sounds in its `Boombox` folder, where the car looks for them; music fills the whole drive.
+- The dashcam drive is sized to leave room for these drives as they fill. Changing a drive's size recreates it, and its files come back with the next sync. Adding or removing a drive reconnects all of them when Glovebox restarts, which the car takes like the Pi restarting.
 
 ## Keeping the car awake
 
@@ -91,7 +118,7 @@ The journal is kept in memory to spare the SD card, so it's lost when the car cu
 | Route | |
 |---|---|
 | `GET /api/status` | Pi health: uptime, memory, temperature, Wi-Fi, disk |
-| `GET /api/drive` | USB gadget state (is the car connected), snapshot count, last cleanup |
+| `GET /api/drive` | USB gadget state (is the car connected), snapshot count, last cleanup, extra drives and their last sync |
 | `GET /api/snapshots`, `POST /api/snapshots`, `DELETE /api/snapshots/{id}` | List, take, delete snapshots |
 | `GET /api/snapshots/{id}/files` | Files in a snapshot |
 | `GET /api/events?kind=sentry\|saved`, `GET /api/events/{kind}/{id}[?encrypted=1]` | Events and their clips |
@@ -99,4 +126,6 @@ The journal is kept in memory to spare the SD card, so it's lost when the car cu
 | `GET /media/{snapshot}/{path}` | A clip, thumbnail or event.json (supports Range) |
 | `GET /api/events/{kind}/{id}/zip[?encrypted=1]`, `GET /api/recent/zip?from=…&to=…[&encrypted=1]` | Every camera of an event, or of the recent clips between two start times, as one zip |
 | `GET /api/archive`, `POST /api/archive/run` | Backup status, start a run now |
+| `GET /api/wifi`, `GET /api/wifi/networks`, `POST /api/wifi/join`, `POST /api/setup/finish` | First-run wizard: Wi-Fi state and the setup network, networks in range, join one, finish (or skip) the wizard. Changes must be sent as JSON. |
+| `GET /api/setup`, `PUT /api/setup`, `POST /api/setup/test`, `POST /api/setup/ssh-key`, `PUT /api/setup/rclone-config` | The Setup page: read and save the backup target and extra drives (then Glovebox restarts), test a connection, make the SSH key for rsync, store an rclone.conf. Changes must be sent as JSON. |
 | `GET /api/car`, `PUT /api/car/vin`, `POST /api/car/pair`, `POST /api/car/check`, `POST /api/car/forget`, `GET /api/car/state` | Bluetooth pairing and keep-awake. Changes must be sent as JSON. |

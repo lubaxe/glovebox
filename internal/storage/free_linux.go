@@ -19,3 +19,13 @@ func FreeBytes(path string) (int64, error) {
 	_, free, err := DiskSpace(path)
 	return free, err
 }
+
+// Allocated returns how much of the filesystem path's blocks take up, which
+// for a sparse disk image is less than its size.
+func Allocated(path string) (int64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		return 0, err
+	}
+	return st.Blocks * 512, nil
+}

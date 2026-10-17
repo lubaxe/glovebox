@@ -259,3 +259,24 @@ func (w *writer) symlink(target, link string) {
 		w.err = os.Symlink(target, link)
 	}
 }
+
+func (g *Gadget) lunDir(lun int) string {
+	return filepath.Join(g.root(), "functions", msFunc, fmt.Sprintf("lun.%d", lun))
+}
+
+// Eject takes the medium out of one drive, as if it was unplugged, even if
+// the host asked to keep it in. The other drives stay connected.
+func (g *Gadget) Eject(lun int) error {
+	if err := os.WriteFile(filepath.Join(g.lunDir(lun), "forced_eject"), []byte("1\n"), 0o644); err != nil {
+		return fmt.Errorf("ejecting drive %d: %w", lun, err)
+	}
+	return nil
+}
+
+// Load puts file into an ejected drive; the host sees a new medium.
+func (g *Gadget) Load(lun int, file string) error {
+	if err := os.WriteFile(filepath.Join(g.lunDir(lun), "file"), []byte(file+"\n"), 0o644); err != nil {
+		return fmt.Errorf("loading %s into drive %d: %w", file, lun, err)
+	}
+	return nil
+}

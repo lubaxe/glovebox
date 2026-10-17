@@ -388,3 +388,72 @@ func TestEmptyStateFileStartsOver(t *testing.T) {
 		t.Errorf("after saving: count=%d err=%v", again.Count(), err)
 	}
 }
+
+func (t *fakeTarget) Remove(_ context.Context, remote string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.files, remote)
+	return nil
+}
+
+func (t *fakeTarget) Mirror(context.Context, string, string) error { return nil }
+
+func TestDrivesSyncOnArrivalAndTrigger(t *testing.T) {
+	snaps := &snapSet{}
+	snaps.add(t, "snap-000001", standardDrive)
+	a, _ := newArchiver(t, snaps)
+	a.HomeDelay, a.CheckInterval, a.RescanInterval = time.Millisecond, 5*time.Millisecond, 20*time.Millisecond
+	var mu sync.Mutex
+	syncs := 0
+	a.SyncDrives = func(context.Context) { mu.Lock(); syncs++; mu.Unlock() }
+	count := func() int { mu.Lock(); defer mu.Unlock(); return syncs }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx)
+	wait := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for count() < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d syncs, want %d", count(), n)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	wait(1)
+	time.Sleep(100 * time.Millisecond) // several rescans
+	if n := count(); n != 1 {
+		t.Errorf("rescans synced the drives: %d syncs", n)
+	}
+	a.Trigger()
+	wait(2)
+}
+
+func TestStateStartsOverForANewTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive-state.json")
+	st, _ := LoadState(path)
+	if st.UseTarget("smb://nas/TeslaCam/") {
+		t.Error("a new state has nothing to start over")
+	}
+	st.Mark("TeslaCam/SentryClips/a/front.mp4", 10)
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = LoadState(path)
+	if st.UseTarget("smb://nas/TeslaCam/") || !st.Done("TeslaCam/SentryClips/a/front.mp4", 10) {
+		t.Error("same target: the state should be kept")
+	}
+	if !st.UseTarget("rclone:gdrive:TeslaCam") || st.Done("TeslaCam/SentryClips/a/front.mp4", 10) {
+		t.Error("new target: the state should start over")
+	}
+
+	// a state saved before targets were recorded is kept
+	if err := os.WriteFile(path, []byte(`{"files":{"x":1}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = LoadState(path)
+	if st.UseTarget("smb://nas/TeslaCam/") || !st.Done("x", 1) {
+		t.Error("an old state should be adopted")
+	}
+}
