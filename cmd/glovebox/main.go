@@ -27,6 +27,7 @@ import (
 	"github.com/lubaxe/glovebox/internal/snapshot"
 	"github.com/lubaxe/glovebox/internal/sysinfo"
 	"github.com/lubaxe/glovebox/internal/system"
+	"github.com/lubaxe/glovebox/internal/update"
 	"github.com/lubaxe/glovebox/internal/web"
 	"github.com/lubaxe/glovebox/internal/wifi"
 )
@@ -102,11 +103,14 @@ func run() error {
 		Runner: system.Exec{Log: log}, Gateway: setup.Gateway,
 	}
 	api.Restart = func() {
-		// systemd stops this process and starts a new one; the drives stay
-		// connected unless the new settings change them
-		log.Info("restarting to use the new settings")
+		// for new settings or a new version: systemd stops this process and
+		// starts a new one; the drives stay connected unless the new settings
+		// change them
+		log.Info("restarting")
 		go system.Exec{Log: log}.Run(context.Background(), "systemctl", "--no-block", "restart", "glovebox.service")
 	}
+	updater := update.New("lubaxe/glovebox", version, system.Exec{Log: log}, api.Restart, log)
+	api.Update = updater
 	if cfg.Drive.Enabled {
 		// On a freshly flashed card this creates the backingfiles partition.
 		bf := &provision.Backingfiles{
@@ -176,8 +180,9 @@ func run() error {
 							Interval: time.Duration(cfg.KeepAwake.Interval),
 							Max:      time.Duration(cfg.KeepAwake.MaxDuration),
 							Cooldown: time.Duration(cfg.KeepAwake.Cooldown),
-							Busy:     func() bool { return a.Status().CatchingUp },
-							Log:      log,
+							// also while updating: the car's sleep would cut the Pi's power
+							Busy: func() bool { return a.Status().CatchingUp || updater.Busy() },
+							Log:  log,
 						}
 						api.KeepAwake = k
 						if _, paired := car.Paired(); paired {

@@ -192,7 +192,9 @@ function renderFoot() {
   if (!s) return;
   $('#foot').replaceChildren(
     el('div', {}, s.system.hostname),
-    el('div', {}, `version ${s.version}`));
+    el('div', {}, `version ${s.version}`),
+    updateInfo?.available && updateInfo.latest && updateInfo.state === 'idle'
+      ? el('a', { class: 'update-link', href: '#/settings' }, `${updateInfo.latest.version} is available`) : '');
 }
 
 // ---------- overview ----------
@@ -231,7 +233,7 @@ function renderOverviewStats() {
     }
     cards.push(stat(n.state, 'cloud', 'NAS backup', n.text, sub, extra));
   } else {
-    cards.push(stat('warn', 'cloud', 'NAS backup', 'Not set up', 'Tell Glovebox where to copy clips on the Setup page.', null, '#/setup'));
+    cards.push(stat('warn', 'cloud', 'NAS backup', 'Not set up', 'Tell Glovebox where to copy clips on the Settings page.', null, '#/settings'));
   }
 
   if (status.drive) {
@@ -245,7 +247,7 @@ function renderOverviewStats() {
       let sub = synced ? `Last synced ${ago(new Date(synced))}` : 'Synced when the car gets home';
       if (failed) sub = `${failed.label.toLowerCase()}: ${failed.last_error}`;
       cards.push(stat(failed ? 'warn' : '', 'music', 'Extra drives',
-        extras.map((x) => `${x.label[0]}${x.label.slice(1).toLowerCase()} ${gb(x.size_bytes)}`).join(' · '), sub, null, '#/setup'));
+        extras.map((x) => `${x.label[0]}${x.label.slice(1).toLowerCase()} ${gb(x.size_bytes)}`).join(' · '), sub, null, '#/settings'));
     }
   }
 
@@ -886,19 +888,148 @@ async function showCar() {
 
 function showSetup() {
   const box = el('div');
-  page('setup', 'Setup', el('div', { class: 'setup-page' },
+  const upd = el('div', { class: 'panel update' });
+  page('settings', 'Settings', el('div', { class: 'setup-page' },
     el('div', { class: 'welcome' },
       el('div', {},
         el('h2', {}, 'All settings'),
         el('p', {}, 'Or let the guided setup walk you through Wi-Fi, backups, extra drives and your car, skipping what\'s already set up.')),
       el('a', { class: 'btn', href: '#/welcome' }, 'Guided setup')),
-    box));
+    box, upd));
   window.GloveboxSetup.mount(box, { onSaved: refreshStatus });
+  mountUpdate(upd);
+}
+
+// ---------- software update ----------
+
+let updateInfo = null; // the last /api/update answer, for the sidebar
+
+// notes renders the little Markdown that release notes use: ### headings,
+// - bullets, **bold**, `code` and links (as their text).
+function notes(md) {
+  const inline = (t) => t.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').split(/(\*\*[^*]+\*\*|`[^`]+`)/).filter(Boolean).map((part) =>
+    part.startsWith('**') ? el('b', {}, part.slice(2, -2)) : part.startsWith('`') ? el('code', {}, part.slice(1, -1)) : part);
+  const out = [];
+  let list = null;
+  for (const line of md.split('\n')) {
+    const t = line.trim();
+    if (t.startsWith('- ')) {
+      if (!list) out.push(list = el('ul'));
+      list.append(el('li', {}, inline(t.slice(2))));
+      continue;
+    }
+    list = null;
+    if (!t || /^##\s+what's new$/i.test(t)) continue;
+    if (t.startsWith('#')) out.push(el('h4', {}, t.replace(/^#+\s*/, '')));
+    else out.push(el('p', {}, inline(t)));
+  }
+  return el('div', { class: 'notes' }, out);
+}
+
+function updateResult(state, msg) {
+  const mark = state === 'busy' ? el('span', { class: 'spinner' }) : el('span', { class: 'mark' }, state === 'ok' ? '✓' : '✕');
+  return el('div', { class: `result ${state}` }, mark, el('span', {}, msg));
+}
+
+// mountUpdate shows the running version, checks GitHub for a newer one and
+// installs it.
+function mountUpdate(box) {
+  let u = null;
+  let error = '';
+  let timer = null;
+  const alive = () => box.isConnected;
+
+  async function load(path, method) {
+    try {
+      u = method ? await send(method, path) : await api(path);
+      error = '';
+    } catch (e) {
+      error = e.message;
+    }
+    if (u) updateInfo = u;
+    renderFoot();
+    if (alive()) render();
+  }
+
+  // Glovebox restarts after the install: wait for the new version to
+  // answer, then load its page.
+  async function waitForRestart(from) {
+    const until = Date.now() + 5 * 60 * 1000;
+    while (alive() && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const st = await api('/api/status');
+        if (st.version !== from) {
+          box.replaceChildren(el('h3', {}, 'Software update'), updateResult('ok', `Updated to ${st.version}. Loading the new version…`));
+          setTimeout(() => location.reload(), 1500);
+          return;
+        }
+      } catch { /* still restarting */ }
+    }
+    if (alive()) {
+      error = 'Glovebox hasn\'t come back after the update. Give it a minute and reload the page; if it still doesn\'t answer, unplug the Pi and plug it back in.';
+      u = { ...u, state: 'idle' };
+      render();
+    }
+  }
+
+  function poll() {
+    clearTimeout(timer);
+    if (!alive() || !u) return;
+    if (u.state === 'restarting') waitForRestart(u.current);
+    else if (u.state === 'installing' || u.state === 'checking') timer = setTimeout(async () => { await load('/api/update'); poll(); }, 1500);
+  }
+
+  function render() {
+    const head = el('div', { class: 'update-head' },
+      el('div', {},
+        el('h3', {}, 'Software update'),
+        el('p', { class: 'muted' }, u ? `This is Glovebox ${u.current}${u.release ? '' : ' (a test build)'}.` : 'Checking…')));
+    const parts = [head];
+    if (!u || !u.supported) {
+      if (u) parts.push(el('p', { class: 'muted' }, `Glovebox can't update itself here: ${u.why}.`));
+      if (error) parts.push(updateResult('bad', error));
+      box.replaceChildren(...parts);
+      return;
+    }
+    const busy = u.state === 'installing' || u.state === 'restarting';
+    const check = el('button', { class: 'btn', disabled: busy || u.state === 'checking' }, 'Check for updates');
+    check.addEventListener('click', async () => { u = { ...u, state: 'checking' }; render(); await load('/api/update/check', 'POST'); });
+    head.append(check);
+
+    if (u.state === 'checking') parts.push(updateResult('busy', 'Asking GitHub for the latest version…'));
+    else if (u.state === 'installing') parts.push(updateResult('busy', `${u.step || 'Installing'}…`));
+    else if (u.state === 'restarting') parts.push(updateResult('busy', `Restarting with ${u.latest?.version}. The car's drive stays connected.`));
+    else if (u.available && u.latest) {
+      const l = u.latest;
+      const install = el('button', { class: 'btn btn-primary' }, `Install ${l.version}`);
+      install.addEventListener('click', async () => {
+        if (!confirm(`Install Glovebox ${l.version}? Glovebox restarts to finish, which takes about a minute. The car's drive stays connected.`)) return;
+        install.disabled = true;
+        await load('/api/update/install', 'POST');
+        poll();
+      });
+      parts.push(el('div', { class: 'update-new' },
+        el('div', { class: 'update-title' }, el('b', {}, `Glovebox ${l.version} is available`),
+          l.published ? el('span', { class: 'muted' }, ` · ${fmtDay(new Date(l.published))}`) : null),
+        l.notes ? notes(l.notes) : null,
+        el('div', { class: 'row' }, install,
+          l.url ? el('a', { href: l.url, target: '_blank', rel: 'noopener' }, 'Release notes on GitHub') : null)));
+    } else if (u.latest && !u.error) {
+      parts.push(updateResult('ok', `Up to date: ${u.latest.version} is the latest version${u.checked ? ` (checked ${ago(new Date(u.checked))})` : ''}.`));
+    }
+    const err = error || u.error;
+    if (err && !busy) parts.push(updateResult('bad', err));
+    box.replaceChildren(...parts);
+  }
+
+  render();
+  load('/api/update?check=1').then(poll);
 }
 
 function showWelcome() {
   const box = el('div', { class: 'setup-page' });
-  page('setup', 'Guided setup', box);
+  page('settings', 'Guided setup', box);
   window.GloveboxSetup.wizard(box, { onFinish: () => { location.hash = '#/'; refreshStatus(); } });
 }
 
@@ -924,7 +1055,7 @@ function route() {
   if (view === 'recent') return showRecent();
   if (KIND[view]) return showEvents(view);
   if (view === 'car') return showCar();
-  if (view === 'setup') return showSetup();
+  if (view === 'settings' || view === 'setup') return showSetup(); // #/setup: before 0.4
   if (view === 'welcome') return showWelcome();
   return showOverview();
 }
@@ -933,3 +1064,5 @@ window.addEventListener('hashchange', route);
 firstRun().then((moved) => { if (!moved) route(); });
 refreshStatus();
 setInterval(refreshStatus, 10000);
+// what the last check found, for the sidebar (without asking GitHub again)
+api('/api/update').then((u) => { updateInfo = u; renderFoot(); }).catch(() => {});

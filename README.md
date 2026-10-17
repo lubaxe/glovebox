@@ -35,6 +35,7 @@ Glovebox plugs into your Tesla's USB port and becomes its dashcam drive. Your ca
 - **Music, light shows and Boombox.** Optional extra drives for the car, filled from folders on your NAS and updated whenever you get home. Only a drive that changed is swapped, so the dashcam keeps recording.
 - **Works with encrypted dashcam recordings.** If your car encrypts its clips, Glovebox backs them up as they are, and downloads a whole drive or event in one go for you to watch on dashcam.tesla.com.
 - **Clean web app.** A synchronized six-camera player, Sentry and saved events with thumbnails and locations, your footage grouped into drives, and live status. Works on your phone.
+- **Updates itself.** The Settings page says when there's a new release and installs it with one button, while the car keeps recording.
 - **Looks after the car's drive.** Clears out events that are safely on your NAS so the car never runs out of room to save new ones. Nothing that isn't backed up is ever deleted.
 
 ## Screenshots
@@ -86,8 +87,8 @@ The full guide, with troubleshooting, is in [docs/install.md](docs/install.md).
 
 ## Changing settings
 
-- **Guided setup**, on the **Setup** page, walks through the wizard again. What's set up already is folded into a summary; open just the part you want to change.
-- **All settings**, the rest of the **Setup** page, shows every backup and drive setting on one page.
+- **Guided setup**, on the **Settings** page, walks through the wizard again. What's set up already is folded into a summary; open just the part you want to change.
+- **All settings**, the rest of the **Settings** page, shows every backup and drive setting on one page.
 - **Moved house or changed your Wi-Fi?** Put an empty file named `glovebox-setup` on the card's boot partition and restart the Pi: the setup network comes back.
 
 For setups without a phone, or to prepare many cards, every setting can also go in `glovebox.toml` on the boot partition before first boot; see [Setting up without the wizard](docs/install.md#setting-up-without-the-wizard). All settings and their defaults are in [deploy/glovebox.toml](deploy/glovebox.toml).

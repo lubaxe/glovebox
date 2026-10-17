@@ -496,7 +496,7 @@
         h('h2', {}, rerun ? 'Change your setup' : 'Welcome to Glovebox'),
         h('p', {}, rerun ? 'Everything set up already is folded: open just the parts you want to change, and save.'
           : 'A few steps, and your Sentry and saved clips back themselves up whenever the car gets home.')),
-      h('div', { class: 'row' }, rerun ? h('a', { class: 'btn btn-quiet', href: '#/setup' }, 'All settings') : null, skip)), box);
+      h('div', { class: 'row' }, rerun ? h('a', { class: 'btn btn-quiet', href: '#/settings' }, 'All settings') : null, skip)), box);
     await mount(box, {
       before: wifi ? [wifiStep(wifi, again)] : [],
       after: rerun ? [carStep(car)] : [carStep(car), finishStep(opts.onFinish)],

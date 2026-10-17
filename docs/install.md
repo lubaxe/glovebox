@@ -88,13 +88,27 @@ Plug the Pi into the car if it isn't already. The car's dashcam icon should show
 
 ## Changing settings later
 
-- **Setup → Guided setup** runs the wizard again. What's set up already is folded into a summary with a button to change just that part.
-- **Setup** itself shows all backup and drive settings on one page.
+- **Settings → Guided setup** runs the wizard again. What's set up already is folded into a summary with a button to change just that part.
+- **Settings** itself shows all backup and drive settings on one page.
 - **Moved house or changed your Wi-Fi?** Put an empty file named `glovebox-setup` on the card's boot partition (the drive called **bootfs** on a computer) and restart the Pi. The setup network comes back until you've finished the wizard again.
 
 <img src="screenshots/setup.png" alt="Guided setup run again: Wi-Fi, backups, extra drives and the car folded into summaries, each with a Change button">
 
 The settings are stored in `/etc/glovebox/glovebox.toml` on the Pi, with passwords in root-only files next to it.
+
+## Updating
+
+The bottom of the **Settings** page shows the version the Pi runs and checks GitHub for a newer release when you open it (at most every six hours). After that, the sidebar also says when one is available. **Install** downloads it, checks the files against the release's `SHA256SUMS`, makes sure the new version runs on this board, puts it in place and restarts Glovebox. That takes a minute or two on a Pi Zero 2 W. The car's drive stays connected the whole time, so the car keeps recording. If the car is paired for keep-awake, Glovebox keeps it awake until the update is done, so the car going to sleep can't cut the Pi's power partway. The page reloads with the new version.
+
+<img src="screenshots/update.png" width="600" alt="Software update on the Settings page: v0.4.0 is available, with what's new and an Install button">
+
+This works on any board where Glovebox came from the image or `install.sh`: it fetches the 64-bit or 32-bit ARM build to match the board. It updates Glovebox itself, `tesla-control` and the service. It doesn't install system packages a newer release may need. When a release needs new packages, its notes say so: run its `install.sh` again (your settings and recordings are kept) or flash the new image.
+
+The previous version is kept as `/usr/local/bin/glovebox.old`. To go back to it:
+
+```sh
+sudo mv /usr/local/bin/glovebox.old /usr/local/bin/glovebox && sudo systemctl restart glovebox
+```
 
 ## Setting up without the wizard
 
@@ -111,7 +125,7 @@ At boot, Glovebox applies the file: Wi-Fi becomes a NetworkManager connection, p
 | The phone shows no sign-in page | Open `http://192.168.66.1` while on the setup network. Some phones switch back to mobile data on a network without internet; turn mobile data off for a moment. |
 | The Pi doesn't join Wi-Fi | The Pi Zero 2 W only does 2.4 GHz. Check the password and country in the wizard; the error says what NetworkManager reported. |
 | Can't open glovebox.local | Some networks and older Android versions don't resolve `.local` names. Use the address the wizard showed, or find `glovebox` in your router's device list. |
-| Backups don't start | Press **Test the connection** on the Setup page. The NAS must be reachable from the garage (port 445 for SMB, 2049 for NFS, 22 for SSH), or for rclone the home check address. The Overview page and `/backingfiles/glovebox.log` show what happened. |
+| Backups don't start | Press **Test the connection** on the Settings page. The NAS must be reachable from the garage (port 445 for SMB, 2049 for NFS, 22 for SSH), or for rclone the home check address. The Overview page and `/backingfiles/glovebox.log` show what happened. |
 | Pairing shows nothing on the car's screen | Nothing appears until you lay the key card on the phone charging pad. The request expires after about 30 seconds, so send it again just before. |
 | Clips show a lock | Your car encrypts its recordings. See [Encrypted clips](how-it-works.md#encrypted-clips). |
 

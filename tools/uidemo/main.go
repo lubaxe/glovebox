@@ -32,6 +32,7 @@ import (
 	"github.com/lubaxe/glovebox/internal/snapshot"
 	"github.com/lubaxe/glovebox/internal/sysinfo"
 	"github.com/lubaxe/glovebox/internal/system"
+	"github.com/lubaxe/glovebox/internal/update"
 	"github.com/lubaxe/glovebox/internal/web"
 	"github.com/lubaxe/glovebox/internal/wifi"
 )
@@ -46,6 +47,7 @@ func main() {
 	extras := flag.Bool("extras", false, "show music and Boombox drives")
 	firstRun := flag.Bool("firstrun", false, "start as a Pi that isn't set up, on its setup network")
 	setupDone := flag.Bool("setupdone", false, "start as a Pi on home Wi-Fi with setup finished, for Guided setup")
+	updates := flag.String("update", "available", `software update to show: "available" or "current"`)
 	flag.Parse()
 
 	videos := filepath.Join(*footage, "videos")
@@ -77,6 +79,7 @@ func main() {
 		Archive: fakeArchive{state: *state}, Car: car, KeepAwake: fakeKeepAwake{},
 		Setup: demoSetup(*footage),
 	}
+	s.Update = newFakeUpdater(s, *updates == "available")
 	switch {
 	case *firstRun:
 		s.WiFi = &fakeWiFi{}
@@ -376,5 +379,72 @@ func (f *fakeWiFi) FinishSetup() error {
 	f.mu.Lock()
 	f.done = true
 	f.mu.Unlock()
+	return nil
+}
+
+// fakeUpdater has a v0.4.0 to install, and goes through the steps of
+// installing it.
+type fakeUpdater struct {
+	mu     sync.Mutex
+	srv    *web.Server
+	status update.Status
+}
+
+func newFakeUpdater(srv *web.Server, available bool) *fakeUpdater {
+	// with nothing to install, it runs the latest version
+	current, latest := "v0.3.0", "v0.4.0"
+	if !available {
+		current = latest
+	}
+	srv.Version = current
+	return &fakeUpdater{srv: srv, status: update.Status{
+		Current: current, Release: true, Supported: true, State: "idle", Available: available, Checked: time.Now().Add(-2 * time.Minute),
+		Latest: &update.Release{
+			Version: latest, URL: "https://github.com/lubaxe/glovebox/releases/tag/" + latest, Published: time.Now().Add(-26 * time.Hour),
+			Notes: "## What's new\n\n### Updates from the web app\n- **Settings** shows when there's a new version and installs it with one button. " +
+				"The car's drive stays connected, and the car is kept awake until it's done.\n\n" +
+				"### Settings\n- The Setup page is now **Settings**, with a gear icon.",
+		},
+	}}
+}
+
+func (f *fakeUpdater) Status(context.Context, bool) update.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status
+}
+
+func (f *fakeUpdater) Check(context.Context) update.Status {
+	time.Sleep(1500 * time.Millisecond)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status.Checked = time.Now()
+	return f.status
+}
+
+func (f *fakeUpdater) Install() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.status.Available {
+		return fmt.Errorf("there's no update to install; check again first")
+	}
+	f.status.State = "installing"
+	go func() {
+		steps := []string{"Downloading the checksums", "Downloading glovebox-linux-arm64", "Downloading tesla-control-linux-arm64", "Checking the new version", "Installing " + f.status.Latest.Version}
+		for _, s := range steps {
+			f.mu.Lock()
+			f.status.Step = s
+			f.mu.Unlock()
+			time.Sleep(1500 * time.Millisecond)
+		}
+		f.mu.Lock()
+		f.status.State, f.status.Step = "restarting", ""
+		f.mu.Unlock()
+		time.Sleep(4 * time.Second)
+		f.mu.Lock()
+		f.status = update.Status{Current: f.status.Latest.Version, Release: true, Supported: true, State: "idle", Latest: f.status.Latest, Checked: time.Now()}
+		f.srv.Version = f.status.Current // the demo's "restart"
+		f.mu.Unlock()
+	}()
 	return nil
 }

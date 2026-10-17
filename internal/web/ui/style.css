@@ -487,6 +487,20 @@ a.stat:hover { border-color: var(--faint); }
 /* ---------- setup page ---------- */
 
 .setup-page { max-width: 860px; }
+.update { margin-top: 24px; }
+.update-head { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }
+.update-head h3 { margin: 0 0 4px; font-size: 16px; }
+.update-head p { margin: 0; }
+.update-head .btn { white-space: nowrap; }
+.update-new { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.update-title { margin-bottom: 6px; }
+.notes { color: var(--muted); font-size: 14px; max-height: 320px; overflow-y: auto; margin-bottom: 14px; }
+.notes h4 { margin: 12px 0 4px; color: var(--text); font-size: 14px; }
+.notes p { margin: 4px 0; }
+.notes ul { margin: 4px 0; padding-left: 20px; }
+.notes li { margin: 3px 0; }
+.notes b { color: var(--text); font-weight: 600; }
+.update-link { display: block; margin-top: 4px; color: var(--accent); }
 [hidden] { display: none !important; }
 .welcome { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
 .welcome h2 { margin: 0 0 4px; font-size: 22px; }

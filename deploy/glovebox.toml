@@ -1,5 +1,5 @@
 # Every Glovebox setting, with its default. Reference only: the web app's
-# Setup page (and its Guided setup) writes /etc/glovebox/glovebox.toml for
+# Settings page (and its Guided setup) writes /etc/glovebox/glovebox.toml for
 # you. To set up without the wizard, put any of these in glovebox.toml on the
 # boot partition before first boot. Anything left out uses the default here.
 
@@ -60,7 +60,7 @@ min_free = "4G"
 
 [archive]
 # Copy clips to your NAS (or anywhere else) whenever it's reachable, which
-# means the car is home. The web app's Setup page fills this in, with a
+# means the car is home. The web app's Settings page fills this in, with a
 # connection test.
 enabled = false
 # smb, nfs, rsync or rclone; its settings are in the table of that name.
@@ -98,7 +98,7 @@ options = "vers=3,proto=tcp,nolock,soft,timeo=100,retrans=2"
 
 [archive.rsync]
 # A folder on a server, with rsync over SSH. Glovebox logs in with its own
-# key; the Setup page creates it and shows the line to add to the server
+# key; the Settings page creates it and shows the line to add to the server
 # user's ~/.ssh/authorized_keys.
 server = ""
 port = 22
@@ -110,7 +110,7 @@ known_hosts = "/etc/glovebox/ssh/known_hosts"
 [archive.rclone]
 # Any rclone remote: Google Drive, OneDrive, Dropbox, S3, B2, SFTP,
 # WebDAV... Set it up on a computer with "rclone config", then paste the
-# rclone.conf on the Setup page (or put it next to glovebox.toml on the boot
+# rclone.conf on the Settings page (or put it next to glovebox.toml on the boot
 # partition). Needs check_address above.
 remote = ""            # remote:folder, e.g. "gdrive:TeslaCam"
 config = "/etc/glovebox/rclone.conf"

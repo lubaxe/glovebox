@@ -40,6 +40,8 @@ type Server struct {
 	Restart func()
 	// WiFi is nil where Glovebox doesn't manage Wi-Fi.
 	WiFi WiFi
+	// Update installs new releases.
+	Update Updater
 }
 
 // Handler returns the HTTP handler for all routes.
@@ -53,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	s.carRoutes(mux)
 	s.setupRoutes(mux)
 	s.wifiRoutes(mux)
+	s.updateRoutes(mux)
 	ui, err := fs.Sub(uiFiles, "ui")
 	if err != nil {
 		panic(err) // the embedded directory is always there
