@@ -53,7 +53,8 @@ Glovebox plugs into your Tesla's USB port and becomes its dashcam drive. Your ca
     <td align="center"><img src="docs/screenshots/setup-phone.png" width="260" alt="The setup wizard on a phone, choosing the home Wi-Fi network"><br><sub><b>First run:</b> set up from your phone, no files to edit.</sub></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><img src="docs/screenshots/mobile.png" width="260" alt="Glovebox on a phone"><br><sub><b>On your phone</b>, from the garage.</sub></td>
+    <td><img src="docs/screenshots/backups.png" alt="Choosing SMB, NFS, rsync over SSH or rclone, and a connection test that says which step failed"><br><sub><b>Backups:</b> SMB, NFS, rsync over SSH or rclone, with a connection test that says which step failed.</sub></td>
+    <td align="center"><img src="docs/screenshots/mobile.png" width="260" alt="Glovebox on a phone"><br><sub><b>On your phone</b>, from the garage.</sub></td>
   </tr>
 </table>
 

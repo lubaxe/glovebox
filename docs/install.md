@@ -66,6 +66,8 @@ Join it. Most phones then show a sign-in page, which is Glovebox's setup. If you
 
 ### The wizard
 
+<p align="center"><img src="screenshots/setup-phone.png" width="260" alt="The wizard on a phone, choosing the home Wi-Fi network"></p>
+
 1. **Wi-Fi.** Pick your home network (*Scan* looks again), enter its password, and pick your country, which sets the Wi-Fi channels allowed there. The Pi Zero 2 W only does 2.4 GHz. Your phone may drop off the setup network for a moment while the Pi connects; the page picks up where it was. Once connected, the page shows the Pi's address on your home network, e.g. `http://glovebox.local:8080`. You can carry on over the setup network or switch your phone back to your home Wi-Fi and open that address.
 2. **Backups.** Pick where clips go and fill in the details:
    - **SMB share:** the NAS's address, the share, an optional folder, and a user and password.
@@ -74,6 +76,9 @@ Join it. Most phones then show a sign-in page, which is Glovebox's setup. If you
    - **rclone:** set up the remote on a computer with `rclone config` (it signs in to cloud services in a browser), then paste the contents of its `rclone.conf` (`rclone config file` shows where it is). Pick the remote and a folder, and enter a **home check address**: something only reachable at home, such as your router (e.g. `192.168.1.1:80`), so Glovebox knows when the car is home.
 
    Press **Test the connection**: Glovebox reaches the server, logs in, writes a small test file, reads it back and deletes it, and says which step failed if one does. Tick **Also back up all driving footage** if you want Recent clips too (15–20 GB per hour of driving).
+
+   <img src="screenshots/backups.png" width="600" alt="Choosing SMB, NFS, rsync over SSH or rclone, and a connection test that reached the NAS but couldn't log in">
+
 3. **Extra drives** (optional). Give the music, light show or Boombox drive a size and name the folder on your server to copy it from. The dashcam drive keeps the rest of the space.
 4. **Save.** Glovebox restarts with the new settings; the dashcam drive stays connected.
 5. **Your car.** Enter your VIN (in the car under Controls → Software, or in the Tesla app). Then, in the car with a key card, open the **Car** page: press **Send pairing request**, lay the key card on the phone charging pad behind the cupholders, and confirm on the car's screen. Press **Check pairing** to make sure. This can wait until later.
@@ -86,6 +91,8 @@ Plug the Pi into the car if it isn't already. The car's dashcam icon should show
 - **Setup → Guided setup** runs the wizard again. What's set up already is folded into a summary with a button to change just that part.
 - **Setup** itself shows all backup and drive settings on one page.
 - **Moved house or changed your Wi-Fi?** Put an empty file named `glovebox-setup` on the card's boot partition (the drive called **bootfs** on a computer) and restart the Pi. The setup network comes back until you've finished the wizard again.
+
+<img src="screenshots/setup.png" alt="Guided setup run again: Wi-Fi, backups, extra drives and the car folded into summaries, each with a Change button">
 
 The settings are stored in `/etc/glovebox/glovebox.toml` on the Pi, with passwords in root-only files next to it.
 
