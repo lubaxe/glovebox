@@ -32,7 +32,8 @@ var (
 //
 //  1. removes files fsck recovered from deleted data, and
 //  2. while free space is below target, removes Sentry and Saved files that
-//     archived reports are safely on the NAS, oldest event first.
+//     archived reports are safely on the NAS, oldest event first, whether
+//     the car recorded them plain or encrypted (EncryptedClips).
 //
 // Files that aren't archived are never removed, whatever the free space.
 // space reports the filesystem's total and free bytes.
@@ -66,10 +67,12 @@ func cleanCamDrive(root string, keepFreePercent int,
 		return c, nil
 	}
 
+	// kind is the event folder's parent below TeslaCam, slash-separated
 	type event struct{ kind, name string }
 	var events []event
-	for _, kind := range []string{"SentryClips", "SavedClips"} {
-		entries, _ := os.ReadDir(filepath.Join(root, "TeslaCam", kind))
+	for _, kind := range []string{"SentryClips", "SavedClips",
+		"EncryptedClips/SentryClips", "EncryptedClips/SavedClips"} {
+		entries, _ := os.ReadDir(filepath.Join(root, "TeslaCam", filepath.FromSlash(kind)))
 		for _, e := range entries {
 			if e.IsDir() && eventDir.MatchString(e.Name()) {
 				events = append(events, event{kind, e.Name()})
@@ -83,7 +86,7 @@ func cleanCamDrive(root string, keepFreePercent int,
 		if free >= target {
 			break
 		}
-		dir := filepath.Join(root, "TeslaCam", ev.kind, ev.name)
+		dir := filepath.Join(root, "TeslaCam", filepath.FromSlash(ev.kind), ev.name)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue

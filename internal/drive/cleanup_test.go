@@ -3,6 +3,7 @@ package drive
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -134,6 +135,51 @@ func TestCleanupChecksSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !d.exists(oldSentry+"2026-10-01_09-59-00-front.mp4") || c.Deleted != 1 {
+		t.Errorf("cleanup = %+v", c)
+	}
+}
+
+// with "Encrypt Dashcam Recordings" on, the car records events under
+// TeslaCam/EncryptedClips instead
+const (
+	encOldSentry = "TeslaCam/EncryptedClips/SentryClips/2026-09-30_10-00-00/"
+	encSaved     = "TeslaCam/EncryptedClips/SavedClips/2026-10-01_09-00-00/"
+)
+
+func encryptedDriveFiles() map[string]int {
+	files := driveFiles()
+	files[encOldSentry+"2026-09-30_09-59-00-front.mp4"] = 20
+	files[encSaved+"2026-10-01_08-59-00-front.mp4"] = 20
+	return files
+}
+
+func TestCleanupDeletesArchivedEncryptedEventsOldestFirst(t *testing.T) {
+	// 136 bytes used of 160 after junk; 25% target = 40 free, so 16 short:
+	// deleting the oldest event, an encrypted one (20 bytes), is enough
+	d := newFakeDrive(t, 160, encryptedDriveFiles())
+	c, err := cleanCamDrive(d.root, 25, d.space, allArchived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.exists(encOldSentry) || !d.exists(encSaved) || !d.exists(oldSentry) {
+		t.Errorf("wrong events deleted: %+v", c)
+	}
+	if c.Deleted != 1 || c.Events != 1 || c.Freed != 20 || c.FreeAfter < 40 {
+		t.Errorf("cleanup = %+v", c)
+	}
+}
+
+func TestCleanupNeverDeletesUnarchivedEncrypted(t *testing.T) {
+	d := newFakeDrive(t, 100, encryptedDriveFiles()) // badly short of space
+	notEncOld := func(rel string, _ int64) bool { return !strings.HasPrefix(rel, encOldSentry) }
+	c, err := cleanCamDrive(d.root, 25, d.space, notEncOld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.exists(encOldSentry + "2026-09-30_09-59-00-front.mp4") {
+		t.Error("deleted an encrypted file that isn't archived")
+	}
+	if d.exists(encSaved) || d.exists(oldSentry) || c.NotArchived != 1 {
 		t.Errorf("cleanup = %+v", c)
 	}
 }

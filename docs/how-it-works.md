@@ -77,7 +77,7 @@ sudo tesla-control -ble -vin <VIN> -key-file /etc/glovebox/ble/private.pem wake
 The car never deletes Sentry or Saved events itself; when its drive fills, it stops saving new ones. At startup, before presenting the drive, Glovebox:
 
 - removes files `fsck` recovered from deleted data
-- while less than `drive.keep_free_percent` (default 25%) of the drive is free, deletes Sentry and Saved files that the backup state shows are on the NAS at full size, oldest event first. **Files that aren't backed up are never deleted.**
+- while less than `drive.keep_free_percent` (default 25%) of the drive is free, deletes Sentry and Saved files that the backup state shows are on the NAS at full size, oldest event first. Events the car recorded encrypted (`TeslaCam/EncryptedClips`, with "Encrypt Dashcam Recordings" on) count the same way. **Files that aren't backed up are never deleted.**
 - runs `fstrim`, so space freed on the drive is freed in the backing file too
 
 Deleted events stay browsable in the web UI from older snapshots until those are cleaned up.
