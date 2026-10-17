@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0d1016">
+  <title>Glovebox</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='7' width='26' height='19' rx='5' fill='%23e8403a'/%3E%3Crect x='9' y='13' width='14' height='3' rx='1.5' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.6 3.1 8.4 7.5 9.5 4.4-1.1 7.5-4.9 7.5-9.5V6z"/><circle cx="12" cy="11.5" r="2.5"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
+    <symbol id="i-car" viewBox="0 0 24 24"><path d="M5 16V11l2-5h10l2 5v5"/><path d="M3 16h18v3H3z"/><circle cx="7.5" cy="13" r="1"/><circle cx="16.5" cy="13" r="1"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 3v14M9 6l3-3 3 3M8 11v2l4 3M16 9v3l-4 3"/><circle cx="12" cy="19" r="2"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .6-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/><path d="m9.5 13 2.5 2.5 2.5-2.5M12 10v5.5"/></symbol>
+    <symbol id="i-disk" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 14h18"/><circle cx="17" cy="16.5" r=".8"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 5 13h6l-1 9 8-11h-6z"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.5 4.5L20 16m0 4v-4h-4"/></symbol>
+    <symbol id="i-card" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 14h4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M18 6v12L9 12zM6 6v12" /></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M6 6v12l9-6zM18 6v12"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></symbol>
+  </svg>
+
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="#/">
+        <span class="logo" aria-hidden="true"></span>
+        <span>Glovebox</span>
+      </a>
+      <nav class="nav" id="nav">
+        <a href="#/" data-nav="overview"><svg><use href="#i-home"/></svg><span>Overview</span></a>
+        <a href="#/sentry" data-nav="sentry"><svg><use href="#i-shield"/></svg><span>Sentry</span></a>
+        <a href="#/saved" data-nav="saved"><svg><use href="#i-bookmark"/></svg><span>Saved</span></a>
+        <a href="#/recent" data-nav="recent"><svg><use href="#i-film"/></svg><span>Recent</span></a>
+        <a href="#/car" data-nav="car"><svg><use href="#i-car"/></svg><span>Car</span></a>
+      </nav>
+      <div class="sidebar-foot" id="foot"></div>
+    </aside>
+
+    <div class="content">
+      <header class="topbar">
+        <h1 id="title">Overview</h1>
+        <div id="chips" class="chips" aria-live="polite"></div>
+      </header>
+      <main id="view"></main>
+    </div>
+  </div>
+
+  <template id="player-tpl">
+    <section class="player">
+      <div class="player-head">
+        <a class="icon-btn" id="back" title="Back"><svg><use href="#i-back"/></svg></a>
+        <div class="player-titles">
+          <h2 id="player-title"></h2>
+          <p id="player-sub" class="muted"></p>
+        </div>
+      </div>
+      <div id="cams" class="cams"></div>
+      <div class="controls">
+        <button class="icon-btn" id="prev" type="button" title="Previous minute"><svg><use href="#i-prev"/></svg></button>
+        <button class="play-btn" id="play" type="button" title="Play / pause (space)"><svg><use href="#i-play"/></svg></button>
+        <button class="icon-btn" id="next" type="button" title="Next minute"><svg><use href="#i-next"/></svg></button>
+        <span id="clock" class="clock">--:--:--</span>
+        <input id="scrub" type="range" min="0" max="0" step="0.1" value="0" aria-label="Position">
+        <select id="speed" aria-label="Speed">
+          <option value="1">1&times;</option>
+          <option value="2">2&times;</option>
+          <option value="4">4&times;</option>
+        </select>
+      </div>
+      <div class="strip" id="clip-strip"></div>
+      <details class="panel downloads">
+        <summary><svg><use href="#i-download"/></svg> Download this minute</summary>
+        <div id="downloads" class="file-chips"></div>
+      </details>
+    </section>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

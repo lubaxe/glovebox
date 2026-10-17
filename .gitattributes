@@ -1,0 +1,5 @@
+# Everything here runs on Linux; keep LF line endings even on Windows checkouts.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

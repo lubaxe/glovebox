@@ -1,0 +1,65 @@
+# glovebox configuration. Installed as /etc/glovebox/glovebox.toml.
+# Anything left out uses the default shown here.
+
+[log]
+# debug, info, warn or error
+level = "info"
+
+[web]
+# Address the web UI and API listen on.
+listen = ":8080"
+
+[drive]
+# Present a drive to the car and snapshot it. Needs an XFS filesystem with
+# reflink support at backingfiles; the image creates one at first boot.
+enabled = true
+backingfiles = "/backingfiles"
+# Size of the car's dashcam drive; "0" makes it as large as fits, leaving
+# snapshots.min_free.
+cam_size = "0"
+# Also offer a USB serial console (ttyGS0) on the same cable.
+serial_console = false
+# Power the Pi asks the car's USB port for, in mA.
+max_power_ma = 200
+# At startup, before the car sees the drive, archived Sentry and Saved events
+# are deleted from it, oldest first, until this much of it is free. Events
+# that aren't on the NAS yet are never deleted.
+keep_free_percent = 25
+
+[snapshots]
+# How often to snapshot the car's drive.
+interval = "58m"
+# Keep at least this much free on backingfiles; the oldest snapshots are
+# deleted to stay above it. When the car overwrites half of it between
+# snapshots, a snapshot is taken early so older ones can go.
+min_free = "4G"
+
+[archive]
+# Copy clips to an SMB share whenever the NAS is reachable (the car is home).
+enabled = false
+server = ""            # e.g. "192.168.1.10"
+share = "TeslaCam"
+folder = ""            # optional folder inside the share
+# Root-only file with "username=..." and "password=..." lines.
+credentials = "/etc/glovebox/smb-credentials"
+sentry = true
+saved = true
+recent = false         # the car loops through these constantly
+# "2.1" is fastest on a Pi Zero 2 W (no AES/SHA instructions); "" negotiates.
+smb_version = "2.1"
+parallel = 4           # writes in flight per file; 4 fills the Zero 2 W's Wi-Fi
+home_delay = "20s"     # NAS must be reachable this long before archiving
+check_interval = "30s" # how often to check whether the NAS is reachable
+rescan_interval = "10m" # how often to look for new clips while home
+
+[keep_awake]
+# Keep the car awake over Bluetooth while uploading what it recorded away,
+# so it doesn't cut the Pi's power mid-upload. Nothing happens until a key
+# is paired with the car, which is done on the web UI's Car page.
+enabled = true
+vin = ""               # the car's VIN; can also be set on the Car page
+key_dir = "/etc/glovebox/ble"  # the Bluetooth key and pairing state
+command = "tesla-control"
+interval = "2m"        # how often to wake it while uploading
+max_duration = "1h"    # longest to keep it awake at a time
+cooldown = "6h"        # then leave it alone this long

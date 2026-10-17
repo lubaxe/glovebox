@@ -1,0 +1,57 @@
+# ============================================================================
+#  Glovebox setup
+# ============================================================================
+#
+# Fill this in, then put the card in the Pi (or, if you installed Glovebox on
+# an existing Raspberry Pi OS, restart it: sudo systemctl restart glovebox).
+#
+# To use a setting, delete the "# " in front of it and fill in your value.
+# Anything you leave alone keeps its default.
+#
+# When Glovebox starts, it applies this file, moves it to
+# /etc/glovebox/glovebox.toml (passwords go to root-only files) and leaves
+# glovebox-status.txt here saying what it did, or what was wrong. To change
+# settings later, put a new glovebox.toml here and restart the Pi.
+
+
+# ---- 1. Wi-Fi (needed for backups) -----------------------------------------
+# Your home network. The Pi Zero 2 W only does 2.4 GHz Wi-Fi.
+# Skip this if you installed Glovebox on a Pi that's already on Wi-Fi.
+
+[system]
+# wifi_ssid = "your network name"
+# wifi_password = "your Wi-Fi password"
+# wifi_country = "US"                    # two-letter country code
+
+# Optional: log in over SSH with a key (the Glovebox image has no password
+# login). Paste your public key, e.g. the contents of ~/.ssh/id_ed25519.pub
+# ssh_key = "ssh-ed25519 AAAA... you@pc"
+# hostname = "glovebox"
+
+
+# ---- 2. Your NAS (where clips are backed up) -------------------------------
+# Any SMB share works: Unraid, Synology, TrueNAS, Windows, ... A user and a
+# share just for Glovebox is a good idea.
+
+[archive]
+# enabled = true
+# server = "192.168.1.10"                # the NAS's address
+# share = "TeslaCam"                     # the shared folder's name
+# username = "carcam"
+# password = "the share password"
+# recent = false                         # true: also back up all driving
+#                                        # footage (15-20 GB per hour on HW4)
+
+
+# ---- 3. Optional ------------------------------------------------------------
+
+[keep_awake]
+# Keeps the car awake while it backs up. Pair with your car on the Car page
+# of the web app (http://<the Pi's address>:8080); setting the VIN here just
+# saves typing it there.
+# vin = "your 17-character VIN"
+
+[drive]
+# Size of the car's dashcam drive. By default it gets all the space except
+# 4 GB that Glovebox keeps for snapshots.
+# cam_size = "40G"

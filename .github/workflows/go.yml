@@ -1,0 +1,22 @@
+name: Go
+
+on:
+  push:
+    paths: ['**.go', 'go.mod', 'go.sum', '.github/workflows/go.yml']
+  pull_request:
+    paths: ['**.go', 'go.mod', 'go.sum', '.github/workflows/go.yml']
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Build for the Pi
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/glovebox

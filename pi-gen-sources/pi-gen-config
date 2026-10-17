@@ -1,0 +1,11 @@
+IMG_NAME=glovebox
+PI_GEN_RELEASE=glovebox
+RELEASE=trixie
+TARGET_HOSTNAME=glovebox
+FIRST_USER_NAME=glovebox
+# pi-gen requires a password here; build-image.sh passes a random one and
+# the image then removes it (login is SSH keys only).
+DISABLE_FIRST_BOOT_USER_RENAME=1
+# stage0 (base system, kernel), stage1 (bootable minimum) and glovebox's own
+# minimal stage instead of Raspberry Pi OS Lite's stage2
+STAGE_LIST="stage0 stage1 stage_glovebox"

@@ -1,0 +1,14 @@
+name: ShellCheck
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run ShellCheck
+        shell: bash
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          ./check.sh

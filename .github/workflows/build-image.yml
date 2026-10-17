@@ -1,0 +1,141 @@
+name: Build image
+
+# Builds everything a release needs: the flashable image (a minimal 64-bit
+# Raspberry Pi OS with Glovebox compiled from this commit), the glovebox
+# and tesla-control programs and install.sh for an existing Raspberry Pi OS,
+# with checksums.
+#
+# - Push to the release branch: publishes release v<VERSION>. Bump VERSION
+#   first; an existing version is refused.
+# - Run it by hand (Actions > Build image): publishes a pre-release named
+#   build-<date>-<commit>, for testing.
+#
+# It takes a while, so it doesn't run on ordinary pushes.
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      pi_gen_ref:
+        description: pi-gen tag to build with (must match RELEASE in pi-gen-config)
+        default: 2026-10-06-raspios-trixie-arm64
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      PI_GEN_REF: ${{ inputs.pi_gen_ref || '2026-10-06-raspios-trixie-arm64' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Pick the version
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/release ]
+          then
+            version="v$(tr -d '[:space:]' < VERSION)"
+            if gh release view "$version" > /dev/null 2>&1
+            then
+              echo "::error::$version is already released; bump VERSION"
+              exit 1
+            fi
+            echo "PRERELEASE=" >> "$GITHUB_ENV"
+          else
+            version="build-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}"
+            echo "PRERELEASE=--prerelease" >> "$GITHUB_ENV"
+          fi
+          echo "GLOVEBOX_VERSION=$version" >> "$GITHUB_ENV"
+          # (runner.temp can't be used in the job's env block)
+          echo "WORKDIR=$RUNNER_TEMP/build" >> "$GITHUB_ENV"
+          echo "Building $version"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build image
+        run: pi-gen-sources/build-image.sh
+
+      - name: Measure the image
+        run: |
+          deploy="$WORKDIR/pi-gen/deploy"
+          ls -l "$deploy"
+          zip=$(ls "$deploy"/*.zip)
+          # MB = 1,000,000 bytes, as Raspberry Pi quotes its images
+          mb() { echo $(( ($1 + 500000) / 1000000 )); }
+          download=$(stat -c %s "$zip")
+          image=$(unzip -l "$zip" | awk '/\.img$/ {print $1}')
+          installed=$(sudo du -sb --exclude=boot/firmware "$WORKDIR"/pi-gen/work/*/stage_glovebox/rootfs | cut -f1)
+          packages=$(grep -c '^ii ' "$deploy"/*.info)
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Download | $(mb "$download") MB |"
+            echo "| Image (written to the card) | $(mb "$image") MB |"
+            echo "| Installed system | $(mb "$installed") MB |"
+            echo "| Packages | $packages |"
+          } | tee "$RUNNER_TEMP/metrics.md"
+
+      - name: Collect release files
+        run: |
+          shopt -s nullglob
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out"
+          # pi-gen names the image image_<date>-glovebox.zip
+          images=("$WORKDIR"/pi-gen/deploy/*.zip)
+          if [ ${#images[@]} -ne 1 ]
+          then
+            echo "::error::expected one image in $WORKDIR/pi-gen/deploy, found ${#images[@]}"
+            exit 1
+          fi
+          cp "${images[0]}" "$out/glovebox-$GLOVEBOX_VERSION-image.zip"
+          cp "$WORKDIR/glovebox" "$out/glovebox-linux-arm64"
+          cp "$WORKDIR/tesla-control" "$out/tesla-control-linux-arm64"
+          cp deploy/glovebox.service deploy/glovebox.toml LICENSE THIRD-PARTY-NOTICES.md "$out/"
+          cp pi-gen-sources/00-glovebox/files/glovebox-boot.toml "$out/"
+          # install.sh fetches this release's files, not whatever is latest
+          sed "s/^VERSION=latest .*/VERSION=$GLOVEBOX_VERSION/" scripts/install.sh > "$out/install.sh"
+          grep -q "^VERSION=$GLOVEBOX_VERSION$" "$out/install.sh"
+          (cd "$out" && sha256sum -- * > SHA256SUMS)
+          ls -l "$out"
+
+      - name: Publish release
+        run: |
+          out="$RUNNER_TEMP/release"
+          {
+            echo "## Install"
+            echo
+            echo "**New card:** flash \`glovebox-$GLOVEBOX_VERSION-image.zip\` with [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (Choose OS > Use custom), then open the card's boot partition and fill in \`glovebox.toml\`: Wi-Fi, NAS, and optionally an SSH key and your VIN. Put the card in the Pi and plug it into the car's glovebox USB port."
+            echo
+            echo "**Already running Raspberry Pi OS Lite (64-bit)?** Install without reflashing:"
+            echo
+            echo '```sh'
+            echo "curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$GLOVEBOX_VERSION/install.sh | sudo bash"
+            echo '```'
+            echo
+            echo "Full instructions: [docs/install.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/install.md)."
+            echo
+            echo "## This image"
+            echo
+            cat "$RUNNER_TEMP/metrics.md"
+            echo
+            echo "<sub>Built from ${GITHUB_SHA::7} with pi-gen $PI_GEN_REF. Check downloads against SHA256SUMS.</sub>"
+          } > "$RUNNER_TEMP/notes.md"
+          # Release assets, unlike artifacts, don't count against the
+          # Actions storage quota.
+          gh release create "$GLOVEBOX_VERSION" $PRERELEASE --target "$GITHUB_SHA" \
+            --title "Glovebox $GLOVEBOX_VERSION" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$out"/*

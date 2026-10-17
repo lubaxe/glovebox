@@ -1,0 +1,21 @@
+[Unit]
+Description=glovebox dashcam drive service
+# Start as early as possible: until glovebox presents the drive, the car can't
+# record. It needs local filesystems (including /backingfiles), not the
+# network; archiving waits for the NAS by itself.
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service
+Wants=local-fs.target
+RequiresMountsFor=/backingfiles
+Before=multi-user.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=simple
+# Runs as root: it manages the USB gadget, loop devices and mounts.
+ExecStart=/usr/local/bin/glovebox -config /etc/glovebox/glovebox.toml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
