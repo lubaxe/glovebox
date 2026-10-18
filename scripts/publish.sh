@@ -21,6 +21,7 @@
 #
 # Setup, once:
 #   git remote add public https://github.com/<owner>/glovebox.git
+#   git config glovebox.publicName <name>
 #   git config glovebox.publicEmail <id>+<user>@users.noreply.github.com
 #   and list anything that must never be published (VIN, home addresses,
 #   names, ...), one per line, in .git/info/publish-blocklist. That file is
@@ -51,11 +52,15 @@ then
   exit 1
 fi
 remote=${PUBLIC_REMOTE:-public}
-name=$(git config user.name)
+# The public commit's author: its own name and address, never the ones in
+# git config user.*, which this repository's own commits use.
+name=$(git config glovebox.publicName || true)
 email=$(git config glovebox.publicEmail || true)
-if [ -z "$email" ]
+if [ -z "$name" ] || [ -z "$email" ]
 then
-  echo "set the public commit address first: git config glovebox.publicEmail <address>"
+  echo "set the public commit author first:"
+  echo "  git config glovebox.publicName <name>"
+  echo "  git config glovebox.publicEmail <id>+<user>@users.noreply.github.com"
   exit 1
 fi
 if ! git diff --quiet HEAD || [ -n "$(git ls-files --others --exclude-standard)" ]
@@ -112,6 +117,16 @@ done < "$excludes"
 echo "public tree $(git rev-parse --short "$tree"): $(git ls-tree -r --name-only "$tree" | wc -l | tr -d ' ') files," \
   "$(( $(git ls-tree -r --name-only HEAD | wc -l) - $(git ls-tree -r --name-only "$tree" | wc -l) )) left out ($(paste -sd' ' "$excludes"))"
 
+author=$(printf '%s <%s>' "$name" "$email" | tr '[:upper:]' '[:lower:]')
+while IFS= read -r p
+do
+  p=$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')
+  case "$author" in
+    *"$p"*)
+      echo "refusing to publish: the public author ($name <$email>) contains something from the blocklist"
+      exit 1 ;;
+  esac
+done < "$patterns"
 if git grep -n -I -i -F -f "$patterns" "$tree" -- .
 then
   echo
