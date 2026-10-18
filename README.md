@@ -12,7 +12,8 @@
 <p align="center">
   <a href="https://getglovebox.dev/">Website</a> ·
   <a href="https://getglovebox.dev/guides/quick-start/">Setup guide</a> ·
-  <a href="https://getglovebox.dev/guides/compatibility/">Compatibility guide</a>
+  <a href="https://getglovebox.dev/guides/compatibility/">Compatibility guide</a> ·
+  <a href="https://getglovebox.dev/kit/">Want a ready-made kit? Register interest</a>
 </p>
 
 <p align="center">
