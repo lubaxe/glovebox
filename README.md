@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <a href="https://getglovebox.dev/">Website</a> ·
+  <a href="https://getglovebox.dev/guides/quick-start/">Setup guide</a> ·
+  <a href="https://getglovebox.dev/guides/compatibility/">Compatibility guide</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/lubaxe/glovebox/actions/workflows/go.yml"><img src="https://github.com/lubaxe/glovebox/actions/workflows/go.yml/badge.svg" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0 license"></a>
   <img src="https://img.shields.io/badge/Raspberry%20Pi-Zero%202%20W-c51a4a" alt="Raspberry Pi Zero 2 W">
