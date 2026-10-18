@@ -101,18 +101,10 @@ For setups without a phone, or to prepare many cards, every setting can also go 
 
 ## How it works
 
-```mermaid
-flowchart LR
-    car["🚗 Tesla"] -- "USB: records to it<br>like a normal drive" --> pi
-    subgraph pi ["Glovebox (Pi Zero 2 W)"]
-        drive["Car's drive"] -- "instant snapshots" --> snaps["Snapshots<br>(read-only copies)"]
-        snaps --> web["Web app"]
-        snaps --> backup["Backup"]
-    end
-    backup -- "Wi-Fi, when home" --> nas[("Your NAS<br>or cloud")]
-    pi -. "Bluetooth: stay awake<br>until the backup is done" .-> car
-    web --> you["📱 You"]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/how-it-works-dark.svg">
+  <img src="docs/images/how-it-works-light.svg" alt="Tesla records to Glovebox over USB. Glovebox takes read-only snapshots, backs up new clips over Wi-Fi at home to your NAS, server or configured cloud, and serves snapshots to your local browser. Optional Bluetooth keep-awake lasts at most one hour for the first home backup." width="1000">
+</picture>
 
 1. **The car records** to Glovebox exactly as it would to a USB stick.
 2. **Glovebox snapshots the drive** every hour, before each backup, and whenever space runs low. Snapshots are instant and only use space for what the car changes afterwards. Everything Glovebox reads comes from a snapshot, so it never touches files the car might be writing.
