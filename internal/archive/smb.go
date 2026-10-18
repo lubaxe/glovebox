@@ -3,7 +3,6 @@ package archive
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -141,7 +140,11 @@ func (s *smbSession) Size(ctx context.Context, remote string) (int64, bool, erro
 	return fi.Size(), true, nil
 }
 
-func (s *smbSession) Upload(ctx context.Context, remote string, r io.ReaderAt, size int64) (err error) {
+func (s *smbSession) Upload(ctx context.Context, remote string, r io.ReaderAt, size int64) error {
+	return s.UploadVia(ctx, remote, TempName(remote), r, size)
+}
+
+func (s *smbSession) UploadVia(ctx context.Context, remote, tmpName string, r io.ReaderAt, size int64) (err error) {
 	share := s.share.WithContext(ctx)
 	full := s.full(remote)
 	if dir := path.Dir(full); dir != "." {
@@ -149,12 +152,7 @@ func (s *smbSession) Upload(ctx context.Context, remote string, r io.ReaderAt, s
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
 	}
-	// Each attempt gets its own temporary name. When the car cuts the power
-	// mid-upload, the server can keep the dead connection's file open for
-	// hours, and a fixed name would then never be renamed into place.
-	var nonce [4]byte
-	_, _ = rand.Read(nonce[:])
-	tmp := fmt.Sprintf("%s.%x.partial", full, nonce)
+	tmp := s.full(tmpName)
 	_ = share.Remove(full + ".partial") // left by versions that used a fixed name
 	f, err := share.Create(tmp)
 	if err != nil {

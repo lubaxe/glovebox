@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
@@ -19,11 +20,16 @@ type State struct {
 	files map[string]int64
 	// target is where the files went (see config.ArchiveConfig.Destination)
 	target string
+	// partials are temporary files an upload may have left on the target
+	// (the power was cut mid-upload), with how many times deleting them
+	// has failed
+	partials map[string]int
 }
 
 type stateFile struct {
-	Target string           `json:"target,omitempty"`
-	Files  map[string]int64 `json:"files"`
+	Target   string           `json:"target,omitempty"`
+	Files    map[string]int64 `json:"files"`
+	Partials map[string]int   `json:"partials,omitempty"`
 }
 
 // ErrStateReset is returned with an empty State when the state file was
@@ -33,7 +39,7 @@ var ErrStateReset = errors.New("archive state was unreadable; starting over")
 
 // LoadState reads the state file at path; a missing file is an empty state.
 func LoadState(path string) (*State, error) {
-	s := &State{path: path, files: map[string]int64{}}
+	s := &State{path: path, files: map[string]int64{}, partials: map[string]int{}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return s, nil
@@ -48,6 +54,9 @@ func LoadState(path string) (*State, error) {
 	}
 	if f.Files != nil {
 		s.files = f.Files
+	}
+	if f.Partials != nil {
+		s.partials = f.Partials
 	}
 	s.target = f.Target
 	return s, nil
@@ -80,6 +89,42 @@ func (s *State) Prune(keep map[string]bool) {
 	}
 }
 
+// AddPartial records a temporary file an upload is about to write.
+func (s *State) AddPartial(remote string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partials[remote] = 0
+}
+
+// DropPartial forgets a temporary file: it's gone, or it's been tried
+// often enough.
+func (s *State) DropPartial(remote string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.partials, remote)
+}
+
+// FailedPartial counts a failed attempt to delete a temporary file and
+// returns how many there have been.
+func (s *State) FailedPartial(remote string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partials[remote]++
+	return s.partials[remote]
+}
+
+// Partials returns the temporary files that may still be on the target.
+func (s *State) Partials() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.partials))
+	for p := range s.partials {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Count returns how many files are recorded.
 func (s *State) Count() int {
 	s.mu.Lock()
@@ -90,7 +135,7 @@ func (s *State) Count() int {
 // Save writes the state atomically.
 func (s *State) Save() error {
 	s.mu.Lock()
-	b, err := json.Marshal(stateFile{Target: s.target, Files: s.files})
+	b, err := json.Marshal(stateFile{Target: s.target, Files: s.files, Partials: s.partials})
 	s.mu.Unlock()
 	if err != nil {
 		return err
@@ -135,6 +180,7 @@ func (s *State) UseTarget(target string) bool {
 	reset := s.target != "" && s.target != target && len(s.files) > 0
 	if reset {
 		s.files = map[string]int64{}
+		s.partials = map[string]int{} // they're on the old target
 	}
 	s.target = target
 	return reset

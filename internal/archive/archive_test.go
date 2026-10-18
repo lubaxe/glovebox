@@ -457,3 +457,133 @@ func TestStateStartsOverForANewTarget(t *testing.T) {
 		t.Error("an old state should be adopted")
 	}
 }
+
+// cutTarget archives to a local directory. cut, while set, makes uploads
+// stop partway like a power cut: the temporary file stays and nothing
+// cleans it up. locked makes deleting files fail, like a file the server
+// still holds open for a dead connection.
+type cutTarget struct {
+	root   string
+	cut    bool
+	locked bool
+}
+
+func (t *cutTarget) String() string                  { return t.root }
+func (t *cutTarget) Reachable(context.Context) error { return nil }
+func (t *cutTarget) Mirror(context.Context, string, string) error {
+	return errors.New("not used")
+}
+func (t *cutTarget) Connect(context.Context) (Session, error) {
+	return &cutSession{dirSession: &dirSession{root: t.root}, t: t}, nil
+}
+
+type cutSession struct {
+	*dirSession
+	t *cutTarget
+}
+
+func (s *cutSession) UploadVia(ctx context.Context, remote, tmp string, r io.ReaderAt, size int64) error {
+	if s.t.cut {
+		full := s.full(tmp)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, []byte("half a clip"), 0o644); err != nil {
+			return err
+		}
+		return errors.New("write tcp: connection reset by peer")
+	}
+	return s.dirSession.UploadVia(ctx, remote, tmp, r, size)
+}
+
+func (s *cutSession) Remove(ctx context.Context, remote string) error {
+	if s.t.locked {
+		return errors.New("STATUS_SHARING_VIOLATION")
+	}
+	return s.dirSession.Remove(ctx, remote)
+}
+
+func partialsIn(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(p, ".partial") {
+			out = append(out, p)
+		}
+		return nil
+	})
+	return out
+}
+
+func TestUnfinishedUploadIsDeletedNextRun(t *testing.T) {
+	snaps := &snapSet{}
+	snaps.add(t, "snap-000001", standardDrive)
+	st, err := LoadState(filepath.Join(t.TempDir(), "archive-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &cutTarget{root: t.TempDir(), cut: true}
+	a := New(target, clips.NewLibrary(snaps.list), &noSnap{}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	a.run(context.Background())
+	if got := partialsIn(t, target.root); len(got) != 1 {
+		t.Fatalf("after the cut: %v", got)
+	}
+	// the record survives a restart (the cut was a power cut)
+	reloaded, err := LoadState(st.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Partials(); len(got) != 1 || !strings.HasSuffix(got[0], ".partial") {
+		t.Fatalf("recorded partials = %v", got)
+	}
+	a.State = reloaded
+
+	target.cut = false
+	a.run(context.Background())
+	if got := partialsIn(t, target.root); len(got) != 0 {
+		t.Errorf("left behind: %v", got)
+	}
+	if got := a.State.Partials(); len(got) != 0 {
+		t.Errorf("still recorded: %v", got)
+	}
+	if a.State.Count() != 6 {
+		t.Errorf("archived %d files, want 6", a.State.Count())
+	}
+}
+
+func TestLockedPartialIsRetriedThenForgotten(t *testing.T) {
+	snaps := &snapSet{}
+	snaps.add(t, "snap-000001", standardDrive)
+	st, err := LoadState(filepath.Join(t.TempDir(), "archive-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &cutTarget{root: t.TempDir(), cut: true}
+	a := New(target, clips.NewLibrary(snaps.list), &noSnap{}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a.run(context.Background())
+
+	// still held open by the server: kept for later runs
+	target.cut, target.locked = true, true
+	for range maxPartialTries - 1 {
+		a.run(context.Background())
+	}
+	// each run tried again and cut a new upload, so there are several now;
+	// the first one has used up its tries
+	before := len(a.State.Partials())
+	a.run(context.Background())
+	if after := len(a.State.Partials()); after != before {
+		// one forgotten, one new from this run's cut upload
+		t.Errorf("partials %d -> %d, want the same count (one given up, one added)", before, after)
+	}
+
+	// once the server lets go, the rest are deleted
+	target.cut, target.locked = false, false
+	a.run(context.Background())
+	if got := a.State.Partials(); len(got) != 0 {
+		t.Errorf("still recorded: %v", got)
+	}
+	if got := partialsIn(t, target.root); len(got) != 1 {
+		t.Errorf("on the target: %v, want only the one given up on", got)
+	}
+}

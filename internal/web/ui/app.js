@@ -177,9 +177,15 @@ function renderChips() {
   const chips = [chip(u.text, u.state, u.detail)];
   const nas = chip(n.text, n.state, `${n.detail}\nClick to look for new clips now.`);
   nas.classList.add('clickable');
-  nas.addEventListener('click', async () => {
+  nas.setAttribute('role', 'button');
+  nas.tabIndex = 0;
+  const run = async () => {
     await fetch('/api/archive/run', { method: 'POST' });
     setTimeout(refreshStatus, 1500);
+  };
+  nas.addEventListener('click', run);
+  nas.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); run(); }
   });
   chips.push(nas);
   const s = status.system?.system;
@@ -740,22 +746,50 @@ async function showDrive(start, encrypted) {
 // ---------- car ----------
 
 function padArt() {
-  // the console from above: cupholders, then the phone pad with a card on it
+  // Model 3 front console: two inclined charging bays beneath the screen.
   const svg = new DOMParser().parseFromString(`
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 150" class="pad-art" role="img" aria-label="Key card laid flat on the phone charging pad behind the cupholders">
-  <rect x="96" y="12" width="168" height="126" rx="22" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="2"/>
-  <circle cx="148" cy="44" r="18" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width="2"/>
-  <circle cx="212" cy="44" r="18" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width="2"/>
-  <text x="180" y="78" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity=".45">cupholders</text>
-  <rect x="122" y="86" width="116" height="44" rx="8" fill="currentColor" fill-opacity=".07" stroke="currentColor" stroke-opacity=".3" stroke-width="2"/>
-  <g transform="rotate(-6 180 108)">
-    <rect x="146" y="92" width="68" height="32" rx="5" fill="#e8403a"/>
-    <rect x="154" y="112" width="22" height="4" rx="2" fill="#fff" fill-opacity=".85"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 270" class="pad-art" role="img" aria-labelledby="pad-title pad-desc">
+  <title id="pad-title">Place your key card on a wireless charging pad</title>
+  <desc id="pad-desc">Model 3 center console viewed from the seats. A key card rests flat against the left of two inclined wireless charging bays beneath the touchscreen.</desc>
+  <defs>
+    <linearGradient id="pad-shell" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="currentColor" stop-opacity=".09"/>
+      <stop offset="1" stop-color="currentColor" stop-opacity=".03"/>
+    </linearGradient>
+    <linearGradient id="pad-card" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#c8dcff"/><stop offset="1" stop-color="#8eafe9"/>
+    </linearGradient>
+  </defs>
+  <!-- Touchscreen and slim dashboard establish the familiar console silhouette. -->
+  <path d="M50 56h360" stroke="currentColor" stroke-opacity=".1"/>
+  <path d="M116 24h228l-4 42a9 9 0 0 1-9 8H129a9 9 0 0 1-9-8Z" fill="currentColor" fill-opacity=".04" stroke="currentColor" stroke-opacity=".24" stroke-width="1.5"/>
+  <path d="M128 62h204" stroke="currentColor" stroke-opacity=".08"/>
+  <!-- Inclined dual charging tray, with a raised lower retaining lip. -->
+  <path d="M127 82h206l-16 112a15 15 0 0 1-15 13H158a15 15 0 0 1-15-13Z" fill="url(#pad-shell)" stroke="currentColor" stroke-opacity=".28" stroke-width="1.5"/>
+  <path d="M139 90h85v101h-66a6 6 0 0 1-6-5Z" fill="currentColor" fill-opacity=".045" stroke="currentColor" stroke-opacity=".1"/>
+  <path d="M236 90h85l-13 96a6 6 0 0 1-6 5h-66Z" fill="currentColor" fill-opacity=".045" stroke="currentColor" stroke-opacity=".1"/>
+  <path d="M230 94v94M154 196h152" stroke="currentColor" stroke-opacity=".2" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Subtle blue reader rings indicate the placement area, not a separate object. -->
+  <g fill="none" stroke="var(--accent, #9abaff)">
+    <ellipse cx="183" cy="143" rx="32" ry="39" opacity=".13"/>
+    <ellipse cx="183" cy="143" rx="25" ry="32" opacity=".22"/>
+    <ellipse cx="183" cy="143" rx="18" ry="25" opacity=".3"/>
   </g>
-  <text x="300" y="104" font-size="11" fill="currentColor" fill-opacity=".65">phone pad</text>
-  <path d="M292 100h-50" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
-  <text x="18" y="114" font-size="11" fill="currentColor" fill-opacity=".65">key card</text>
-  <path d="M70 110h72" stroke="currentColor" stroke-opacity=".4" stroke-width="1.5"/>
+  <!-- Portrait keycard lies flush with the left charging surface. -->
+  <path d="m164 120 37-4a4 4 0 0 1 4 4l2 58a4 4 0 0 1-4 4l-37 3a4 4 0 0 1-4-4l-2-57a4 4 0 0 1 4-4Z" fill="#101319" fill-opacity=".18" transform="translate(2 3)"/>
+  <path d="m164 117 37-4a4 4 0 0 1 4 4l2 58a4 4 0 0 1-4 4l-37 3a4 4 0 0 1-4-4l-2-57a4 4 0 0 1 4-4Z" fill="url(#pad-card)" stroke="#d9e6ff" stroke-opacity=".75"/>
+  <rect x="171" y="128" width="12" height="9" rx="2" fill="#294d82" fill-opacity=".45" transform="rotate(-6 177 132)"/>
+  <path d="m172 164 20-2m-20 7 12-1" stroke="#294d82" stroke-opacity=".55" stroke-width="2" stroke-linecap="round"/>
+  <!-- Storage cover continues forward toward the seats. -->
+  <path d="m148 207-9 34h182l-9-34m-169 23h174" fill="none" stroke="currentColor" stroke-opacity=".16" stroke-width="1.5"/>
+  <path d="M66 137h67l26 10" fill="none" stroke="var(--accent, #9abaff)" stroke-opacity=".65" stroke-width="1.3"/>
+  <circle cx="159" cy="147" r="2.5" fill="var(--accent, #9abaff)"/>
+  <text x="28" y="123" fill="currentColor" font-size="12" font-weight="600">Key card</text>
+  <text x="28" y="154" fill="currentColor" fill-opacity=".55" font-size="10">Lay flat</text>
+  <path d="M288 144h39l18-13h23" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width="1.3"/>
+  <circle cx="288" cy="144" r="2" fill="currentColor" fill-opacity=".4"/>
+  <text x="346" y="113" fill="currentColor" fill-opacity=".75" font-size="11">Wireless</text>
+  <text x="346" y="127" fill="currentColor" fill-opacity=".75" font-size="11">charging pads</text>
 </svg>`, 'image/svg+xml').documentElement;
   return document.importNode(svg, true);
 }
@@ -831,7 +865,7 @@ async function showCar() {
         el('p', {}, 'Sit in the car with the Pi plugged in and one of your key cards. Then:'),
         el('ol', {},
           el('li', {}, 'Press ', el('b', {}, 'Send pairing request'), '. Nothing shows on the car\'s screen yet.'),
-          el('li', {}, 'Within 30 seconds, lay the ', el('b', {}, 'key card flat on the phone charging pad'), ' behind the cupholders (the card reader is underneath) and hold it for a moment.'),
+          el('li', {}, 'Within 30 seconds, lay the ', el('b', {}, 'key card flat on the phone charging pad'), ' beneath the touchscreen (the card reader is underneath) and hold it for a moment.'),
           el('li', {}, 'The car asks to confirm a new key. Check that it\'s a ', el('b', {}, 'limited key'), ', then accept.')),
         padArt(),
         el('div', { class: 'row' }, pairBtn), pairOut)),

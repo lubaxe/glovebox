@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"strings"
@@ -241,6 +242,7 @@ func (a *Archiver) run(ctx context.Context) {
 		return
 	}
 	defer sess.Close()
+	a.removePartials(ctx, sess)
 
 	events := map[string]bool{}
 	for i, it := range todo {
@@ -284,7 +286,53 @@ func (a *Archiver) upload(ctx context.Context, sess Session, it item) error {
 		return err
 	}
 	defer f.Close()
-	return sess.Upload(ctx, it.remote, f, it.size)
+	tu, ok := sess.(TempUploader)
+	if !ok {
+		return sess.Upload(ctx, it.remote, f, it.size)
+	}
+	// Record the temporary file before writing it: if the power is cut
+	// mid-upload, the next run deletes it.
+	tmp := TempName(it.remote)
+	a.State.AddPartial(tmp)
+	if err := a.State.Save(); err != nil {
+		a.Log.Warn("saving archive state", "err", err)
+	}
+	err = tu.UploadVia(ctx, it.remote, tmp, f, it.size)
+	if err == nil {
+		a.State.DropPartial(tmp) // renamed into place; saved with the file's Mark
+	}
+	return err
+}
+
+// maxPartialTries is how many runs try to delete a temporary file before
+// giving up on it. A server can keep a dead connection's file open, and
+// undeletable, for hours.
+const maxPartialTries = 10
+
+// removePartials deletes temporary files that earlier uploads left behind.
+func (a *Archiver) removePartials(ctx context.Context, sess Session) {
+	partials := a.State.Partials()
+	if len(partials) == 0 {
+		return
+	}
+	for _, p := range partials {
+		err := sess.Remove(ctx, p)
+		switch {
+		case err == nil:
+			a.Log.Info("deleted an unfinished upload", "file", p)
+			a.State.DropPartial(p)
+		case errors.Is(err, fs.ErrNotExist):
+			a.State.DropPartial(p)
+		case a.State.FailedPartial(p) >= maxPartialTries:
+			a.Log.Warn("giving up on deleting an unfinished upload", "file", p, "err", err)
+			a.State.DropPartial(p)
+		default:
+			a.Log.Debug("can't delete an unfinished upload yet", "file", p, "err", err)
+		}
+	}
+	if err := a.State.Save(); err != nil {
+		a.Log.Error("saving archive state", "err", err)
+	}
 }
 
 // queue lists every archivable file in priority order: Sentry, Saved,

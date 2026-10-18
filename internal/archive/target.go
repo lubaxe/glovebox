@@ -45,6 +45,20 @@ type Session interface {
 	Close() error
 }
 
+// TempUploader is a Session that uploads to a temporary file and renames it
+// into place. Archiving picks the temporary name and records it, so a file
+// left behind when the power is cut mid-upload is deleted later.
+type TempUploader interface {
+	UploadVia(ctx context.Context, remote, tmp string, r io.ReaderAt, size int64) error
+}
+
+// TempName returns a temporary name for uploading remote, unique per
+// attempt: after a power cut the server may keep the dead connection's file
+// open for hours, so a fixed name couldn't be reused.
+func TempName(remote string) string {
+	return fmt.Sprintf("%s.%s.partial", remote, nonce())
+}
+
 // Options are what NewTarget needs besides the config.
 type Options struct {
 	Runner system.Runner
@@ -208,12 +222,16 @@ func (s *dirSession) Size(_ context.Context, remote string) (int64, bool, error)
 	return fi.Size(), true, nil
 }
 
-func (s *dirSession) Upload(ctx context.Context, remote string, r io.ReaderAt, size int64) (err error) {
+func (s *dirSession) Upload(ctx context.Context, remote string, r io.ReaderAt, size int64) error {
+	return s.UploadVia(ctx, remote, TempName(remote), r, size)
+}
+
+func (s *dirSession) UploadVia(ctx context.Context, remote, tmpName string, r io.ReaderAt, size int64) (err error) {
 	full := s.full(remote)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
 	}
-	tmp := fmt.Sprintf("%s.%s.partial", full, nonce())
+	tmp := s.full(tmpName)
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err

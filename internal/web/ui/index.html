@@ -4,13 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
-  <meta name="theme-color" content="#0d1016">
+  <meta name="theme-color" content="#101319" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4f6f9" media="(prefers-color-scheme: light)">
   <title>Glovebox</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='7' width='26' height='19' rx='5' fill='%23e8403a'/%3E%3Crect x='9' y='13' width='14' height='3' rx='1.5' fill='white'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <!-- the brand mark; its colors come from --logo-* (the inverse on dark surfaces) -->
+    <symbol id="logo" viewBox="0 0 48 48"><rect width="48" height="48" rx="14" style="fill:var(--logo-box)"/><path d="M12 21L24 27L36 21V32L24 38L12 32Z" style="fill:var(--logo-base)"/><path d="M11 16L23 10L28 16L16 22Z" style="fill:var(--logo-base)"/><path d="M25 10L37 16L32 22L20 16Z" style="fill:var(--logo-flap)"/></symbol>
     <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.6 3.1 8.4 7.5 9.5 4.4-1.1 7.5-4.9 7.5-9.5V6z"/><circle cx="12" cy="11.5" r="2.5"/></symbol>
     <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></symbol>
@@ -40,8 +43,8 @@
   <div class="app">
     <aside class="sidebar">
       <a class="brand" href="#/">
-        <span class="logo" aria-hidden="true"></span>
-        <span>Glovebox</span>
+        <svg class="logo" aria-hidden="true"><use href="#logo"/></svg>
+        <span class="wordmark">glovebox<span class="dot">.</span></span>
       </a>
       <nav class="nav" id="nav">
         <a href="#/" data-nav="overview"><svg><use href="#i-home"/></svg><span>Overview</span></a>
@@ -56,7 +59,7 @@
 
     <div class="content">
       <header class="topbar">
-        <h1 id="title">Overview</h1>
+        <h1><svg class="logo topbar-logo" aria-hidden="true"><use href="#logo"/></svg><span id="title">Overview</span></h1>
         <div id="chips" class="chips" aria-live="polite"></div>
       </header>
       <main id="view"></main>
