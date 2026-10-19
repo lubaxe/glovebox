@@ -4,7 +4,11 @@
 //
 //	go run ./tools/uidemo -footage ~/glovebox-demo
 //
-// then open http://localhost:8090.
+// then open http://localhost:8090. To show real footage instead, put six
+// unencrypted clips of one minute (front.mp4, back.mp4, left_repeater.mp4,
+// right_repeater.mp4, left_pillar.mp4, right_pillar.mp4) and a thumb.png in
+// <footage>/videos first; thumb-1.png, thumb-2.png... give events their own
+// thumbnails.
 package main
 
 import (
@@ -78,6 +82,7 @@ func main() {
 	_ = car.Forget()
 	if *paired {
 		_ = car.SetVIN("5YJ3E1EA0PF000001")
+		_ = os.WriteFile(filepath.Join(car.Dir, "role"), []byte(keepawake.Driver+"\n"), 0o600)
 		_ = car.CheckPairing(context.Background())
 	}
 	s := &web.Server{
@@ -166,6 +171,7 @@ func makeDrive(root, videos string, now time.Time) error {
 		}
 		return nil
 	}
+	thumbs := 0
 	event := func(kind string, at time.Time, minutes int, reason, city string, encrypted bool) error {
 		base := filepath.Join(root, "TeslaCam")
 		if encrypted {
@@ -180,7 +186,12 @@ func makeDrive(root, videos string, now time.Time) error {
 		if encrypted {
 			return nil
 		}
-		if err := link(filepath.Join(videos, "thumb.png"), filepath.Join(dir, "thumb.png")); err != nil {
+		thumbs++
+		thumb := filepath.Join(videos, fmt.Sprintf("thumb-%d.png", thumbs))
+		if _, err := os.Stat(thumb); err != nil {
+			thumb = filepath.Join(videos, "thumb.png")
+		}
+		if err := link(thumb, filepath.Join(dir, "thumb.png")); err != nil {
 			return err
 		}
 		meta := fmt.Sprintf(`{"timestamp":"%s","city":"%s","est_lat":"39.7817","est_lon":"-89.6501","reason":"%s","camera":"0"}`,
@@ -407,7 +418,7 @@ func (f *fakeWiFi) FinishSetup() error {
 	return nil
 }
 
-// fakeUpdater has a v0.4.0 to install, and goes through the steps of
+// fakeUpdater has a v0.6.0 to install, and goes through the steps of
 // installing it.
 type fakeUpdater struct {
 	mu     sync.Mutex
@@ -417,7 +428,7 @@ type fakeUpdater struct {
 
 func newFakeUpdater(srv *web.Server, available bool) *fakeUpdater {
 	// with nothing to install, it runs the latest version
-	current, latest := "v0.3.0", "v0.4.0"
+	current, latest := "v0.5.0", "v0.6.0"
 	if !available {
 		current = latest
 	}
@@ -426,9 +437,9 @@ func newFakeUpdater(srv *web.Server, available bool) *fakeUpdater {
 		Current: current, Release: true, Supported: true, State: "idle", Available: available, Checked: time.Now().Add(-2 * time.Minute),
 		Latest: &update.Release{
 			Version: latest, URL: "https://github.com/lubaxe/glovebox/releases/tag/" + latest, Published: time.Now().Add(-26 * time.Hour),
-			Notes: "## What's new\n\n### Updates from the web app\n- **Settings** shows when there's a new version and installs it with one button. " +
-				"The car's drive stays connected, and the car is kept awake until it's done.\n\n" +
-				"### Settings\n- The Setup page is now **Settings**, with a gear icon.",
+			Notes: "## What's new\n\n### Glovebox encryption\n- Encrypt the footage on the Pi with a key that's yours, under **Settings → Security**. " +
+				"The drive only opens once Glovebox has seen your car over Bluetooth.\n\n" +
+				"### Recorded telemetry\n- The player shows the speed, gear, steering and Autopilot state the car recorded.",
 		},
 	}}
 }

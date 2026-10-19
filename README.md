@@ -32,26 +32,28 @@ Glovebox plugs into your Tesla's USB port and becomes its dashcam drive. Your ca
 
 <sub>Glovebox is free and open source. If it's useful to you, you can <a href="https://buymeacoffee.com/lubaxe">buy me a coffee</a> ☕</sub>
 
+**Contents:** [Features](#features) · [What you need](#what-you-need) · [Getting started](#getting-started) · [Using Glovebox](#using-glovebox) · [Encryption](#encryption) · [How it works](#how-it-works) · [Is it safe?](#is-it-safe) · [FAQ](#faq) · [Development](#development)
+
 ## Features
 
-- **Set up from your phone.** Flash the card and plug it in. Glovebox opens its own Wi-Fi network with a setup wizard: your home Wi-Fi, where backups go (with a connection test), extra drives and your car. No files to edit. Run the wizard again whenever you want to change something; it skips what's already set up.
-- **Automatic backup when you get home.** Glovebox notices your NAS, copies what's new (Sentry first, then saved clips, newest first) and picks up where it left off if the car drives away mid-copy. It backs up to an SMB share, an NFS export, a server with rsync over SSH, or any of the 70-odd storage services rclone supports.
-- **Encrypted on the Pi, with your own key.** Glovebox can encrypt everything it keeps on the card. The drive only opens once Glovebox has seen your car over Bluetooth, and a recovery key that only you hold opens it anywhere. Unlike the car's own encryption, your clips still play in Glovebox and in the car, and the key isn't Tesla's. See [Encryption](#encryption).
-- **Keeps the car awake until the backup is done.** A sleeping Tesla cuts USB power. Glovebox pairs with your car over Bluetooth and, while it backs up, nudges it every minute to stay awake, for at most an hour.
-- **Doesn't back up your garage.** Footage the car records while parked at home after the drive isn't uploaded, so a long backup doesn't leave more to upload next time. (Parked outside? Turn it on in Settings.)
-- **Never gets in the car's way.** The car's drive is never touched while the car is using it. Glovebox reads footage from instant copy-on-write snapshots, repairs those instead, and presents the drive to the car about 16 seconds after power-on.
+- **Set up from your phone.** Flash the card and plug it in. Glovebox opens its own Wi-Fi network with a setup wizard for your home Wi-Fi, your backups, extra drives and your car. No files to edit.
+- **Automatic backup when you get home.** Glovebox notices your NAS, copies what's new (Sentry first, then saved clips, newest first) and picks up where it left off if the car drives away mid-copy. SMB, NFS, rsync over SSH, or any of the 70-odd storage services rclone supports.
+- **Keeps the car awake until the backup is done.** A sleeping Tesla cuts USB power. Glovebox pairs with your car over Bluetooth and nudges it to stay awake while it backs up, for at most an hour.
+- **Doesn't back up your garage.** Footage the car records while parked at home isn't uploaded, so a long backup doesn't leave more to upload next time. (Parked outside? Turn it on in Settings.)
+- **Never gets in the car's way.** Glovebox never touches the car's drive while the car is using it. It reads footage from instant copy-on-write snapshots, and presents the drive to the car about 16 seconds after power-on.
 - **Bigger dashcam drive, more history.** The car gets nearly the whole card (52 GB on a 64 GB card), and snapshots keep clips the car has already overwritten.
-- **Music, light shows and Boombox.** Optional extra drives for the car, filled from folders on your NAS and updated whenever you get home. Only a drive that changed is swapped, so the dashcam keeps recording.
-- **Or keep Tesla's encryption.** If your car encrypts its clips, Glovebox backs them up as they are, and downloads a whole drive or event in one go for you to watch on dashcam.tesla.com.
 - **Clean web app.** A synchronized six-camera player with the speed, gear, steering and Autopilot state the car recorded, Sentry and saved events with thumbnails and locations, your footage grouped into drives, and live status. Works on your phone.
-- **Updates itself.** The Settings page says when there's a new release and installs it with one button, while the car keeps recording.
+- **Encrypted on the Pi, with your own key.** The drive only opens once Glovebox has seen your car over Bluetooth, and a recovery key that only you hold opens it anywhere. Unlike the car's own encryption, your clips still play in Glovebox and in the car. See [Encryption](#encryption).
+- **Or keep Tesla's encryption.** If your car encrypts its clips, Glovebox backs them up as they are, and downloads a whole drive or event in one go for you to watch on dashcam.tesla.com.
+- **Music, light shows and Boombox.** Optional extra drives for the car, filled from folders on your NAS and updated whenever you get home, while the dashcam keeps recording.
 - **Looks after the car's drive.** Clears out events that are safely on your NAS so the car never runs out of room to save new ones. Nothing that isn't backed up is ever deleted.
+- **Updates itself.** The Settings page says when there's a new release and installs it with one button, while the car keeps recording.
 
-## Screenshots
+### Screenshots
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/player.png" alt="Six cameras playing in sync"><br><sub><b>Player:</b> all six cameras in sync, with scrubbing, speed and downloads.</sub></td>
+    <td width="50%"><img src="docs/screenshots/player.png" alt="The player on a night drive, with the recorded speed, gear and FSD state over the front camera"><br><sub><b>Player:</b> six cameras in sync, with the speed, gear and Autopilot state the car recorded.</sub></td>
     <td width="50%"><img src="docs/screenshots/sentry.png" alt="Sentry events grouped by day"><br><sub><b>Sentry:</b> events with thumbnails, reasons and places. Encrypted ones are marked.</sub></td>
   </tr>
   <tr>
@@ -68,11 +70,20 @@ Glovebox plugs into your Tesla's USB port and becomes its dashcam drive. Your ca
   </tr>
 </table>
 
-<sub>Screenshots use generated sample footage.</sub>
+<sub>Screenshots show real footage from a Model 3; the names, addresses and status are made up.</sub>
+
+## What you need
+
+| | |
+|---|---|
+| **A Raspberry Pi Zero 2 W** | Small enough for the glovebox, and it's the right kind of Pi: it can act as a USB drive. |
+| **A microSD card** | A high-endurance card, 64 GB or more; 128–256 GB for more history on HW4 cars. For example SanDisk High Endurance or Samsung PRO Endurance. |
+| **A USB cable** | Micro-USB to whatever your car's glovebox port is (USB-C on recent cars). It must carry data, not just power. It goes into the Pi's **USB** port, not **PWR**: one cable powers the Pi and carries the drive. |
+| **Somewhere to back up to** | A NAS or server reachable from your garage over 2.4 GHz Wi-Fi, with an SMB share, an NFS export or SSH and rsync; or a cloud drive through rclone. A user and folder just for Glovebox is a good idea. |
+| **A Tesla** | Tested on a 2026 Model 3 (HW4). Glovebox uses the standard TeslaCam drive, so other models should work too. |
+| **A key card** (optional) | To pair keep-awake, once. |
 
 ## Getting started
-
-You need a **Raspberry Pi Zero 2 W**, a **microSD card** (64 GB or more, ideally high-endurance), a **USB data cable** for your car, and **somewhere to back up to**. Details are in [What you need](#what-you-need).
 
 1. **Flash the card.** Download `glovebox-<version>-image.zip` from the [latest release](https://github.com/lubaxe/glovebox/releases/latest) and write it with [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (Choose OS → **Use custom**). When Imager offers to customise settings, choose **No**.
 2. **Plug it in.** Put the card in the Pi and connect the Pi's **USB** port (not **PWR**) to the car's glovebox USB port. A phone charger or a computer works too, for setting up at your desk. The car sees its dashcam drive within about 20 seconds.
@@ -84,21 +95,57 @@ You need a **Raspberry Pi Zero 2 W**, a **microSD card** (64 GB or more, ideally
    - **Your car:** enter your VIN, then pair keep-awake on the **Car** page: press *Send pairing request*, lay a key card on the phone charging pad and confirm on the car's screen.
    - **Finish.** The setup network turns off. From now on Glovebox is at `http://glovebox.local:8080` on your home network.
 
-When you park at home, clips start copying to your NAS on their own. The Overview page shows the progress.
+That's it. When you park at home, clips start copying to your NAS on their own, and the Overview page shows the progress.
 
-**Already running Raspberry Pi OS Lite, or using another board?** The image is only for the Pi Zero 2 W, but the installer checks whatever it runs on (Zero W, Pi 4 and 5, other boards that can act as a USB drive) and installs if Glovebox can work there. Then open `http://<the board's name>.local:8080` and the same wizard starts:
+The full guide, with troubleshooting, is in [docs/install.md](docs/install.md).
+
+### Other boards, or an existing Raspberry Pi OS
+
+The image is only for the Pi Zero 2 W, the board Glovebox is built and tested for. On anything else, or on a Pi already running Raspberry Pi OS Lite, use the installer:
 
 ```sh
 curl -fsSL https://github.com/lubaxe/glovebox/releases/latest/download/install.sh | sudo bash
 ```
 
-The full guide, with troubleshooting, is in [docs/install.md](docs/install.md).
+It first checks the board and stops if Glovebox can't work there (run it with `GLOVEBOX_CHECK_ONLY=1` to only check). The board needs a USB port that can act as a drive (Pi Zero, Zero W and Zero 2 W; Pi 4 and 5 on their USB-C port; some other boards), Wi-Fi, and ideally Bluetooth. A Pi 4 or 5 needs more power than many cars' USB ports give; Pi 1, 2 and 3B can't act as a USB drive at all. Once it's installed, open `http://<the board's name>.local:8080` and the same wizard starts.
 
-## Viewing recordings
+## Using Glovebox
 
-The viewer opens in a cinema layout with a large selected camera, a camera thumbnail strip and a Grid view. Playback, seeking, speed, per-camera downloads, clip details, fullscreen and Close are available over the footage. Close returns to the normal navigation.
+### Backups
 
-Compatible recordings show their embedded **speed (MPH or km/h), gear, steering wheel angle, accelerator pedal, brake, turn signals and FSD / Autosteer / cruise state**, synchronized with playback. The details panel also exposes recorded GPS, heading and acceleration. These are values from the recording, not the car's current state. Clips without telemetry show it as unavailable. See [the viewer and telemetry notes](docs/viewer.md).
+When your NAS is reachable, Glovebox copies new clips on its own: Sentry events first, then saved clips, newest first, and all driving footage too if you turned that on in setup. Each file is verified before it's marked done, and if the car drives off mid-copy, it carries on next time.
+
+It can back up to:
+
+- **An SMB share**, with a built-in client (SMB 2.1 by default, as it's fastest on the Pi Zero 2 W).
+- **An NFS export**, mounted only while backing up.
+- **A folder on any server with rsync over SSH.** Glovebox makes its own key and shows it in setup.
+- **Any rclone remote:** Google Drive, OneDrive, Dropbox, S3, Backblaze B2, SFTP, WebDAV and more. Set up the remote on a computer with `rclone config` and paste its `rclone.conf` in setup. Since a cloud drive answers from anywhere, rclone also needs a *home check address*, such as your router, that only answers at home.
+
+Backups run at about 2.5–3.5 MB/s over the Pi Zero 2 W's Wi-Fi. Sentry and saved events (a few hundred MB each) take a minute or two. An hour of HW4 driving footage is 15–20 GB, which is why backing up all driving footage is optional.
+
+While the first backup after you arrive home runs, Glovebox keeps the car awake over Bluetooth so it doesn't cut the power halfway, for at most an hour.
+
+### Watching your footage
+
+Open `http://glovebox.local:8080` from any browser on your home network, including your phone. Sentry and saved events are listed with thumbnails, reasons and places, and your driving footage is grouped into drives.
+
+The player shows a large selected camera with a strip of the others, or all six in a grid, in sync, with seeking, speed, per-camera downloads and fullscreen. Compatible recordings also show what the car recorded alongside the video: **speed, gear, steering wheel angle, accelerator and brake, turn signals and FSD / Autosteer / cruise state**, plus GPS, heading and acceleration in the details panel. These are values from the recording, not the car's current state. See [the viewer and telemetry notes](docs/viewer.md).
+
+Clips the car encrypted itself are backed up as they are and shown with a lock. Download a whole drive or event in one go and open it at [dashcam.tesla.com](https://dashcam.tesla.com), signed in to your Tesla account.
+
+### Music, light shows and Boombox
+
+Turn on an extra drive by giving it a size in setup and naming a folder on your NAS to copy it from. Whenever the car gets home, after the backup, Glovebox brings each drive up to date in a copy of it. Only if something changed does it swap the copy in: the car sees that one drive unplugged and plugged back in, and keeps recording to the dashcam drive throughout. Light shows (an `.fseq` and an `.mp3` or `.wav` with the same name) end up in the drive's `LightShow` folder and Boombox sounds in its `Boombox` folder, where the car looks for them.
+
+### Settings and updates
+
+- **Guided setup**, on the **Settings** page, walks through the wizard again. What's set up already is folded into a summary; open just the part you want to change.
+- **Settings** is split into **Backups**, **Extra drives**, **Security** and **Updates** tabs. **Save and restart** saves everything at once.
+- **Updates:** while the web app is open, Glovebox checks for a new release and shows a notice when there is one. Install it from **Settings → Updates** with one button; the car keeps recording.
+- **Moved house or changed your Wi-Fi?** Put an empty file named `glovebox-setup` on the card's boot partition and restart the Pi: the setup network comes back.
+
+For setups without a phone, or to prepare many cards, every setting can also go in `glovebox.toml` on the boot partition before first boot; see [Setting up without the wizard](docs/install.md#setting-up-without-the-wizard). All settings and their defaults are in [deploy/glovebox.toml](deploy/glovebox.toml).
 
 ## Encryption
 
@@ -113,7 +160,7 @@ You choose who holds the key to your footage:
 | Watch in the car | Yes | Yes | Yes |
 | Copy on your NAS | Plain | Plain | Encrypted by Tesla |
 
-**Turning on Glovebox encryption:**
+### Turning on Glovebox encryption
 
 1. Turn off **Encrypt Dashcam Recordings** in the car (Controls → Safety), so the car records clips Glovebox can play.
 2. In Glovebox, open **Settings → Security** and choose **Create a key**. Your browser makes the key; only its public half goes to the Pi. Download the key file and keep it somewhere safe off the Pi, such as a password manager: it's the only way to open the footage if the Pi dies. Or use a key of your own from `age-keygen`.
@@ -122,16 +169,9 @@ You choose who holds the key to your footage:
 
 From then on, every time the car wakes Glovebox, it checks for your car over Bluetooth before giving the car its drive. That takes about two seconds. The drive then stays open until the car cuts the power. If the car can't be reached, the web app shows the drive as locked, and **Unlock with your key** opens it. The card also holds a README explaining how to open it on a Linux PC with your key.
 
-**What it protects against, and what not.** The card on its own can't be read. Someone who takes the whole Pi can't browse the footage without your car nearby. But the Pi Zero 2 W has no secure chip, so its own key is stored on the Pi: someone who takes the Pi and knows what they're doing can still decrypt it. The copy on your NAS isn't encrypted. While the drive is open, anyone on your network can watch it in the web app, as without encryption. Details are in [Encrypted on the Pi](docs/how-it-works.md#encrypted-on-the-pi).
+### What it protects against
 
-## Changing settings
-
-- **Guided setup**, on the **Settings** page, walks through the wizard again. What's set up already is folded into a summary; open just the part you want to change.
-- **Settings** groups controls into **Backups**, **Extra drives**, **Security**, and **Updates** tabs. Switching tabs keeps unsaved backup and drive edits; **Save and restart** saves both groups together.
-- While the web interface is open, Glovebox automatically checks for a newer release, reusing checks for six hours. A notice links to **Updates** when a release is available; installation still requires your confirmation. Dismiss the banner to hide that release on this browser; the update remains in Settings, and a newer release can notify you again.
-- **Moved house or changed your Wi-Fi?** Put an empty file named `glovebox-setup` on the card's boot partition and restart the Pi: the setup network comes back.
-
-For setups without a phone, or to prepare many cards, every setting can also go in `glovebox.toml` on the boot partition before first boot; see [Setting up without the wizard](docs/install.md#setting-up-without-the-wizard). All settings and their defaults are in [deploy/glovebox.toml](deploy/glovebox.toml).
+The card on its own can't be read. Someone who takes the whole Pi can't browse the footage without your car nearby. But the Pi Zero 2 W has no secure chip, so its own key is stored on the Pi: someone who takes the Pi and knows what they're doing can still decrypt it. The copy on your NAS isn't encrypted. While the drive is open, anyone on your network can watch it in the web app, as without encryption. Details are in [Encrypted on the Pi](docs/how-it-works.md#encrypted-on-the-pi).
 
 ## How it works
 
@@ -147,7 +187,7 @@ For setups without a phone, or to prepare many cards, every setting can also go 
 
 The details, from partitions to power cuts, are in [docs/how-it-works.md](docs/how-it-works.md).
 
-## Lean by design
+### Lean by design
 
 The Glovebox image is Raspberry Pi OS cut down to what a dashcam drive needs, so it downloads faster, boots faster and leaves more of the card for footage.
 
@@ -157,17 +197,6 @@ The Glovebox image is Raspberry Pi OS cut down to what a dashcam drive needs, so
 - **About a third of the Pi Zero 2 W's memory** in use.
 
 How: the image is built from Raspberry Pi's own build system, keeping only its base stages and leaving out the desktop, compilers, kernel headers, the Pi 5 kernel, cloud-init, swap, man pages and translations. Glovebox starts before the network, presents the car's drive within about a second, and only then gets on with snapshots and backups. Logs are kept in memory to save writes to the card, with a small copy on the storage partition that survives power cuts.
-
-## What you need
-
-| | |
-|---|---|
-| **A Raspberry Pi Zero 2 W** | Small enough for the glovebox, and it's the right kind of Pi: it can act as a USB drive. |
-| **A microSD card** | A high-endurance card, 64 GB or more; 128–256 GB for more history on HW4 cars. For example SanDisk High Endurance or Samsung PRO Endurance. |
-| **A USB cable** | Micro-USB to whatever your car's glovebox port is (USB-C on recent cars). It must carry data, not just power. It goes into the Pi's **USB** port, not **PWR**: one cable powers the Pi and carries the drive. |
-| **Somewhere to back up to** | A NAS or server reachable from your garage over 2.4 GHz Wi-Fi, with an SMB share, an NFS export or SSH and rsync; or a cloud drive through rclone. A user and folder just for Glovebox is a good idea. |
-| **A Tesla** | Tested on a 2026 Model 3 (HW4). Glovebox uses the standard TeslaCam drive, so other models should work too. |
-| **A key card** (optional) | To pair keep-awake, once. |
 
 ## Is it safe?
 
@@ -180,26 +209,11 @@ How: the image is built from Raspberry Pi's own build system, keeping only its b
 
 ## FAQ
 
-**Do I have to edit any files?**
-No. Everything is set up in the wizard on your phone. `glovebox.toml` on the boot partition is still there for setting up without a phone; see [Setting up without the wizard](docs/install.md#setting-up-without-the-wizard).
-
 **I don't see the Glovebox-XXXX network.**
 Give the Pi two minutes after plugging it in: it waits that long for a Wi-Fi network it already knows. The network only appears until Glovebox is set up. To bring it back later, put an empty file named `glovebox-setup` on the boot partition and restart the Pi.
 
-**Does it work with encrypted dashcam recordings?**
-Yes. Glovebox backs them up as they are and shows them with a lock. To watch them, open them at [dashcam.tesla.com](https://dashcam.tesla.com) signed in to your Tesla account. Or turn off the car's encryption and let Glovebox encrypt the card instead; see [Encryption](#encryption).
-
-**Can Glovebox encrypt the footage itself?**
-Yes, with a key that's yours. Turn off the car's encryption and turn it on under Settings → Security. Clips still play in Glovebox and in the car, and the drive only opens once Glovebox has seen your car over Bluetooth. It protects the card, not a stolen Pi in the hands of someone who knows what they're doing. See [Encryption](#encryption).
-
-**I lost my key file. What now?**
-While the drive is unlocked, make a new key under Settings → Security and replace the old one: Glovebox re-seals the drive to it. If the drive is locked and the car can't be reached, the footage on the card can't be recovered without the key; anything already backed up is still on your NAS.
-
-**Can I turn Glovebox encryption off again?**
-Not yet from the web app. Reflashing the card gives a fresh, unencrypted Glovebox; your backups on the NAS aren't affected.
-
-**How fast is the backup?**
-About 2.5–3.5 MB/s over the Pi Zero 2 W's Wi-Fi. Sentry and saved events (a few hundred MB each) take a minute or two. An hour of HW4 driving footage is 15–20 GB, which is why backing up all driving footage is an option you turn on in setup.
+**Do I have to edit any files?**
+No. Everything is set up in the wizard on your phone. `glovebox.toml` on the boot partition is only there for setting up without a phone; see [Setting up without the wizard](docs/install.md#setting-up-without-the-wizard).
 
 **Will it drain my battery?**
 Glovebox keeps the car awake only for the first backup after you arrive home, at most an hour, then lets it sleep for at least six hours. Clips the car records while parked are backed up whenever the car is awake anyway, but never keep it awake.
@@ -207,24 +221,26 @@ Glovebox keeps the car awake only for the first backup after you arrive home, at
 **What happens when the card fills up?**
 The car's drive has a fixed size, and the car manages it like any USB drive. Glovebox clears out backed-up events so the car keeps room for new ones, and drops its oldest snapshots when it needs space.
 
-**Where can it back up to?**
-An SMB share (built-in client, SMB 2.1 by default as it's fastest on the Pi Zero 2 W), an NFS export (mounted only while backing up), a folder on any server with rsync over SSH (Glovebox makes its own key and shows it in setup), or any rclone remote: Google Drive, OneDrive, Dropbox, S3, Backblaze B2, SFTP, WebDAV and more. For rclone, set up the remote on a computer with `rclone config` and paste its `rclone.conf` in setup. Since a cloud drive answers from anywhere, rclone also needs a *home check address*, such as your router, that only answers at home.
+**My car encrypts its recordings. Does Glovebox still work?**
+Yes. Glovebox backs them up as they are and shows them with a lock; watch them at [dashcam.tesla.com](https://dashcam.tesla.com). Or turn off the car's encryption and let Glovebox encrypt the card instead, with a key that's yours; see [Encryption](#encryption).
 
-**How do the music, light show and Boombox drives work?**
-Turn one on by giving it a size in setup and naming a folder on your NAS to copy it from. Whenever the car gets home, after the backup, Glovebox brings each drive up to date in a copy of it. Only if something changed does it swap the copy in: the car sees that one drive unplugged and plugged back in, and keeps recording to the dashcam drive throughout. Light shows (an `.fseq` and an `.mp3` or `.wav` with the same name) end up in the drive's `LightShow` folder and Boombox sounds in its `Boombox` folder, where the car looks for them.
+**I lost my key file. What now?**
+While the drive is unlocked, make a new key under Settings → Security and replace the old one: Glovebox re-seals the drive to it. If the drive is locked and the car can't be reached, the footage on the card can't be recovered without the key; anything already backed up is still on your NAS.
+
+**Can I turn Glovebox encryption off again?**
+Not yet from the web app. Reflashing the card gives a fresh, unencrypted Glovebox; your backups on the NAS aren't affected.
 
 **Can I use a different Raspberry Pi, or another board?**
-The image is only for the Pi Zero 2 W, the board Glovebox is built and tested for. On anything else, install Glovebox with `install.sh`: it first checks the board (run it with `GLOVEBOX_CHECK_ONLY=1` to only check) and stops if Glovebox can't work there. The board needs a USB port that can act as a drive (Pi Zero, Zero W and Zero 2 W; Pi 4 and 5 on their USB-C port; some other boards), Wi-Fi, and ideally Bluetooth. A Pi 4 or 5 needs more power than many cars' USB ports give; Pi 1, 2 and 3B can't act as a USB drive at all.
+Possibly, with the installer instead of the image; see [Other boards](#other-boards-or-an-existing-raspberry-pi-os).
 
 ## Development
 
-Glovebox is a single Go service (`cmd/glovebox`) on a minimal 64-bit Raspberry Pi OS image.
+Glovebox is a single Go service (`cmd/glovebox`) on a minimal 64-bit Raspberry Pi OS image. [docs/architecture.md](docs/architecture.md) describes the design, and [docs/how-it-works.md](docs/how-it-works.md) the behaviour and the API.
 
-- `node --test scripts/web-ui.test.mjs scripts/player.test.mjs` checks update notifications, offline recovery, request throttling and recorded telemetry selection.
 - `go test ./...` runs anywhere; the hardware parts (loop devices, mounts, the USB gadget, NetworkManager, Bluetooth, cryptsetup) sit behind small interfaces with fakes. `internal/crypt` and `internal/provision` also have integration tests that run on a Pi as root (`go test -c -tags integration`).
+- `node --test scripts/web-ui.test.mjs scripts/player.test.mjs` tests the web app: update notifications, offline recovery, request throttling and recorded telemetry selection.
 - `go run ./tools/uidemo` serves the web app with generated sample footage, for working on the UI without a Pi (needs ffmpeg). `-firstrun` starts it as a Pi on its setup network, `-extras` adds extra drives.
 - `scripts/deploy.ps1 -Target user@host` cross-compiles for linux/arm64 and installs the service on a Pi over SSH.
-- [docs/architecture.md](docs/architecture.md) describes the design, [docs/how-it-works.md](docs/how-it-works.md) the behaviour and the API.
 
 ### Building the image
 

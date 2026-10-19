@@ -414,6 +414,8 @@ a.stat:hover { border-color: var(--border); }
   padding: 2px 8px; border-radius: 6px;
 }
 .cam.missing video { visibility: hidden; }
+/* the next minute, buffering behind the one showing */
+.cam video.spare { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
 .cam.missing::after {
   content: "not recorded";
   position: absolute; inset: 0;

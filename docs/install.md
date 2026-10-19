@@ -100,7 +100,7 @@ The settings are stored in `/etc/glovebox/glovebox.toml` on the Pi, with passwor
 
 The bottom of the **Settings** page shows the version the Pi runs and checks GitHub for a newer release when you open it (at most every six hours). After that, the sidebar also says when one is available. **Install** downloads it, checks the files against the release's `SHA256SUMS`, makes sure the new version runs on this board, puts it in place and restarts Glovebox. That takes a minute or two on a Pi Zero 2 W. The car's drive stays connected the whole time, so the car keeps recording. If the car is paired for keep-awake, Glovebox keeps it awake until the update is done, so the car going to sleep can't cut the Pi's power partway. The page reloads with the new version.
 
-<img src="screenshots/update.png" width="600" alt="Software update on the Settings page: v0.4.0 is available, with what's new and an Install button">
+<img src="screenshots/update.png" width="600" alt="Software update on the Settings page: v0.6.0 is available, with what's new and an Install button">
 
 This works on any board where Glovebox came from the image or `install.sh`: it fetches the 64-bit or 32-bit ARM build to match the board. It updates Glovebox itself, `tesla-control` and the service. It doesn't install system packages a newer release may need. When a release needs new packages, its notes say so: run its `install.sh` again (your settings and recordings are kept) or flash the new image.
 

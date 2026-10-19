@@ -90,6 +90,9 @@ type Archiver struct {
 	HomeDelay      time.Duration
 	CheckInterval  time.Duration
 	RescanInterval time.Duration
+	// FinalPassAfter is how long after arriving the catch-up takes its
+	// final pass (see finishCatchUp).
+	FinalPassAfter time.Duration
 
 	// OnResult, if set, is called after each run that had something to do.
 	OnResult func(Result)
@@ -111,6 +114,7 @@ func New(t Target, lib Library, snaps Snapshotter, st *State, log *slog.Logger) 
 		HomeDelay:      20 * time.Second,
 		CheckInterval:  30 * time.Second,
 		RescanInterval: 10 * time.Minute,
+		FinalPassAfter: 150 * time.Second,
 		trigger:        make(chan struct{}, 1),
 		status:         Status{Target: t.String(), State: Away},
 	}
@@ -138,7 +142,7 @@ func (a *Archiver) Run(ctx context.Context) {
 	home := false
 	catchUp := false
 	syncDrives := false
-	var lastRun, awaySince time.Time
+	var lastRun, awaySince, arrived time.Time
 	for {
 		triggered := false
 		if err := a.Target.Reachable(ctx); err != nil {
@@ -162,6 +166,7 @@ func (a *Archiver) Run(ctx context.Context) {
 			if !home {
 				a.Log.Info("archive target reachable, car is home", "target", a.Target)
 				home = true
+				arrived = time.Now()
 				a.setState(Home)
 				// let the car settle (and the Wi-Fi connection stabilize)
 				if !sleep(ctx, a.HomeDelay) {
@@ -173,7 +178,10 @@ func (a *Archiver) Run(ctx context.Context) {
 			}
 			if time.Since(lastRun) >= a.RescanInterval {
 				a.setCatchingUp(catchUp)
-				a.run(ctx)
+				res := a.run(ctx)
+				if catchUp {
+					a.finishCatchUp(ctx, arrived, res)
+				}
 				a.setCatchingUp(false)
 				catchUp = false
 				if syncDrives && a.SyncDrives != nil && ctx.Err() == nil {
@@ -240,8 +248,29 @@ func (a *Archiver) setHomeCutoff() {
 	a.Log.Info("car is home; Recent clips recorded after this aren't archived", "after", cutoff)
 }
 
-func (a *Archiver) run(ctx context.Context) {
-	res := Result{Started: time.Now()}
+// finalPasses bounds the catch-up's final passes.
+const finalPasses = 3
+
+// finishCatchUp backs up what the car was still writing as it got home:
+// the minute being recorded on arrival, and the cameras of the minute
+// before, only reach the drive in full a minute or two later. Once the
+// catch-up ends keep-awake lets the car sleep, cutting the Pi's power
+// before the next rescan, so the catch-up waits until FinalPassAfter has
+// passed since arriving and goes again, with a fresh snapshot, for as long
+// as that finds something (at most finalPasses times). The home cutoff
+// still keeps out what was recorded parked.
+func (a *Archiver) finishCatchUp(ctx context.Context, arrived time.Time, res Result) {
+	for i := 0; i < finalPasses && res.Uploaded > 0 && res.Err == "" && ctx.Err() == nil; i++ {
+		if wait := a.FinalPassAfter - time.Since(arrived); wait > 0 && !sleep(ctx, wait) {
+			return
+		}
+		res = a.run(ctx)
+	}
+}
+
+// run takes a fresh snapshot and uploads what isn't archived yet.
+func (a *Archiver) run(ctx context.Context) (res Result) {
+	res = Result{Started: time.Now()}
 	defer func() {
 		res.Duration = time.Since(res.Started)
 		res.Seconds = res.Duration.Seconds()
@@ -324,6 +353,7 @@ func (a *Archiver) run(ctx context.Context) {
 	}
 	a.Log.Info("archiving finished", "uploaded", res.Uploaded, "failed", res.Failed, "pending", res.Pending,
 		"mb", res.Bytes>>20, "seconds", int(time.Since(res.Started).Seconds()))
+	return res
 }
 
 func (a *Archiver) upload(ctx context.Context, sess Session, it item) error {

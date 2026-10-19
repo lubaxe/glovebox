@@ -112,6 +112,7 @@ func newArchiver(t *testing.T, snaps *snapSet) (*Archiver, *fakeTarget) {
 	}
 	target := newTarget()
 	a := New(target, clips.NewLibrary(snaps.list), &noSnap{}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a.FinalPassAfter = 0
 	return a, target
 }
 
@@ -395,7 +396,13 @@ func TestOnlyFirstRunAfterArrivingCatchesUp(t *testing.T) {
 	if !waitFor("SavedClips/2026-10-15_12-00-00/2026-10-15_11-59-00-front.mp4") {
 		t.Error("the first run after arriving should be catching up")
 	}
-	// recorded while parked, picked up by the next run
+	// recorded while parked, picked up by the next run once the catch-up
+	// (with its final pass) is over
+	for deadline := time.Now().Add(2 * time.Second); a.Status().CatchingUp; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("still catching up")
+		}
+	}
 	snaps.add(t, "snap-000002", map[string]int{"TeslaCam/SavedClips/2026-10-15_14-00-00/2026-10-15_13-59-00-front.mp4": clipSize})
 	a.Trigger()
 	if waitFor("SavedClips/2026-10-15_14-00-00/2026-10-15_13-59-00-front.mp4") {
@@ -403,6 +410,66 @@ func TestOnlyFirstRunAfterArrivingCatchesUp(t *testing.T) {
 	}
 	if a.Status().CatchingUp {
 		t.Error("still catching up after the runs")
+	}
+}
+
+// What the car was still writing as it got home is picked up by the
+// catch-up's final pass, while the car is still kept awake: a camera of the
+// last minute that has grown, and the minute being recorded on arrival.
+// Footage recorded after the home cutoff stays out.
+func TestCatchUpFinalPass(t *testing.T) {
+	snaps := &snapSet{}
+	snaps.add(t, "snap-000001", map[string]int{
+		"TeslaCam/RecentClips/2026-10-15_13-00-00-front.mp4": clipSize,
+		"TeslaCam/RecentClips/2026-10-15_13-00-00-back.mp4":  clipSize / 2, // still being written
+	})
+	a, target := newArchiver(t, snaps)
+	a.Recent = true
+	a.HomeDelay, a.CheckInterval, a.RescanInterval = 10*time.Millisecond, 10*time.Millisecond, time.Hour
+	a.FinalPassAfter = 50 * time.Millisecond
+	var mu sync.Mutex
+	seen := map[string]bool{} // remote -> CatchingUp during its upload
+	var once sync.Once
+	target.onUpload = func(remote string) {
+		mu.Lock()
+		seen[remote] = a.Status().CatchingUp
+		mu.Unlock()
+		// meanwhile the car finishes the last minute and the one after it
+		once.Do(func() {
+			snaps.add(t, "snap-000002", map[string]int{
+				"TeslaCam/RecentClips/2026-10-15_13-00-00-front.mp4": clipSize,
+				"TeslaCam/RecentClips/2026-10-15_13-00-00-back.mp4":  clipSize,
+				"TeslaCam/RecentClips/2026-10-15_13-01-00-front.mp4": clipSize, // within the cutoff margin
+				"TeslaCam/RecentClips/2026-10-15_13-05-00-front.mp4": clipSize, // parked at home
+			})
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		_, ok := seen["RecentClips/2026-10-15_13-01-00-front.mp4"]
+		mu.Unlock()
+		if ok && !a.Status().CatchingUp {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("final pass didn't happen; uploaded %v", seen)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !seen["RecentClips/2026-10-15_13-01-00-front.mp4"] {
+		t.Error("the final pass ran without keeping the car awake")
+	}
+	if got, _, _ := target.Size(context.Background(), "RecentClips/2026-10-15_13-00-00-back.mp4"); got != clipSize {
+		t.Errorf("grown camera on the NAS is %d bytes, want %d", got, clipSize)
+	}
+	if _, ok := seen["RecentClips/2026-10-15_13-05-00-front.mp4"]; ok {
+		t.Error("footage recorded at home was uploaded")
 	}
 }
 

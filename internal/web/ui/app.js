@@ -54,6 +54,16 @@ function mediaURL(file, download) {
   return `/media/${encodeURIComponent(file.snapshot)}/${p}?layout=${MEDIA_LAYOUT}${download ? '&download=1' : ''}`;
 }
 
+const telemetryURL = (file) => '/api/telemetry/' + encodeURIComponent(file.snapshot) + '/' + file.path.split('/').map(encodeURIComponent).join('/');
+
+// Stops a video's download and frees its decoder.
+function unload(v) {
+  v.pause();
+  if (!v.getAttribute('src')) return;
+  v.removeAttribute('src');
+  v.load();
+}
+
 // The car records local time without a zone, e.g. "2026-10-15T00:39:00".
 function carTime(s) {
   const [d, t] = s.split('T');
@@ -569,22 +579,36 @@ const player = {
     const set = new Set();
     for (const c of clips) for (const cam of Object.keys(c.cameras)) set.add(cam);
     this.cams = sortCameras(set);
+    // Two videos per camera: the one showing, and the spare that buffers the
+    // next minute behind it, so a drive plays through without a gap.
     this.videos = {};
+    this.spares = {};
+    this.prepared = null;
     $('#cams').style.setProperty('--camera-columns', Math.min(3, this.cams.length));
     $('#cams').style.setProperty('--camera-rows', Math.ceil(this.cams.length / 3));
     $('#cams').style.setProperty('--camera-mobile-columns', Math.min(2, this.cams.length));
     $('#cams').style.setProperty('--camera-mobile-rows', Math.ceil(this.cams.length / 2));
-    $('#cams').replaceChildren(...this.cams.map((cam) => {
+    const video = (cam) => {
       const v = el('video', { muted: true, playsinline: true, preload: 'auto' });
       v.muted = true;
       v.addEventListener('timeupdate', () => this.onTime(v));
       v.addEventListener('ended', () => this.onEnded(v));
       v.addEventListener('loadedmetadata', () => { v.playbackRate = this.speed; });
-      v.addEventListener('loadeddata', () => this.drawThumbnails(true));
-      v.addEventListener('seeked', () => this.drawThumbnails(true));
-      this.videos[cam] = v;
+      v.addEventListener('loadeddata', () => {
+        if (this.videos[cam] !== v) return;
+        this.showFrame(v);
+        this.drawThumbnails(true);
+      });
+      v.addEventListener('seeked', () => this.videos[cam] === v && this.drawThumbnails(true));
+      v.addEventListener('error', () => this.recover(cam, v));
+      return v;
+    };
+    $('#cams').replaceChildren(...this.cams.map((cam) => {
+      this.videos[cam] = video(cam);
+      this.spares[cam] = video(cam);
+      this.spares[cam].classList.add('spare');
       return el('div', { class: 'cam', 'data-cam': cam, onclick: () => this.focus(cam) },
-        v, el('span', { class: 'label' }, CAMERA_NAMES[cam] || cam));
+        this.videos[cam], this.spares[cam], el('span', { class: 'label' }, CAMERA_NAMES[cam] || cam));
     }));
     this.buildCameraRail();
     $('#viewer-info').addEventListener('click', () => {
@@ -614,11 +638,16 @@ const player = {
     $('#speed').value = String(this.speed);
     $('#speed').addEventListener('change', (e) => {
       this.speed = Number(e.target.value);
-      for (const v of Object.values(this.videos)) v.playbackRate = this.speed;
+      for (const v of [...Object.values(this.videos), ...Object.values(this.spares)]) v.playbackRate = this.speed;
     });
+    // The timeline is real time: a drive can include clips shorter than a
+    // minute (the pieces a Saved clip was cut from).
+    const first = carTime(clips[0].start).getTime();
+    this.offsets = clips.map((c) => (carTime(c.start).getTime() - first) / 1000);
+    this.duration = this.offsets[this.offsets.length - 1] + 60;
     const scrub = $('#scrub');
-    scrub.max = clips.length * 60;
-    scrub.value = start * 60;
+    scrub.max = this.duration;
+    scrub.value = this.offsets[start];
     scrub.addEventListener('input', () => { this.scrubbing = true; });
     scrub.addEventListener('change', () => { this.scrubbing = false; this.seek(Number(scrub.value)); });
     this.load(start, false);
@@ -626,25 +655,37 @@ const player = {
 
   load(i, autoplay) {
     this.stopFrameUpdates();
+    // The next minute is already buffering in the spares: show those instead
+    // of starting over, so the drive continues without a blank frame.
+    const swap = this.prepared === i;
+    this.prepared = null;
     this.i = i;
     this.clockSecond = null;
+    this.lastSample = undefined;
     const clip = this.clips[i];
     this.master = null;
     for (const cam of this.cams) {
-      const v = this.videos[cam];
-      const box = v.parentElement;
+      const old = this.videos[cam];
+      const box = old.parentElement;
       const file = clip.cameras[cam];
-      v.pause();
-      if (file) {
-        v.src = mediaURL(file);
-        box.classList.remove('missing');
+      if (swap) {
+        const next = this.spares[cam];
+        next.classList.remove('spare');
+        old.classList.add('spare');
+        this.videos[cam] = next;
+        this.spares[cam] = old;
+        unload(old);
       } else {
-        v.removeAttribute('src');
-        v.load();
-        box.classList.add('missing');
+        old.pause();
+        if (file) old.src = mediaURL(file);
+        else unload(old);
+        unload(this.spares[cam]);
       }
+      box.classList.toggle('missing', !file);
     }
     this.pickMaster();
+    // A spare that loaded before it was swapped in hasn't shown its frame.
+    if (swap) for (const v of Object.values(this.videos)) this.showFrame(v);
     for (const [k, b] of [...$('#clip-strip').children].entries()) b.classList.toggle('current', k === i);
     $('#downloads').replaceChildren(...this.cams.filter((c) => clip.cameras[c]).map((c) =>
       el('a', { href: mediaURL(clip.cameras[c], true) }, icon('download'), CAMERA_NAMES[c] || c)),
@@ -713,24 +754,38 @@ const player = {
     this.telemetryController?.abort();
     this.telemetrySamples = [];
     this.playing = false;
-    for (const v of Object.values(this.videos)) {
-      v.pause();
-      v.removeAttribute('src');
-      v.load(); // stops downloading
-    }
+    for (const v of [...Object.values(this.videos), ...Object.values(this.spares || {})]) unload(v);
     this.videos = {};
+    this.spares = {};
+    this.prepared = null;
     this.clips = [];
   },
 
-  // keep the other cameras within a quarter second of the master
+  // showFrame decodes the frame a camera that isn't streaming has loaded:
+  // Chromium doesn't until it's seeked or played, so its thumbnail stays
+  // blank. Seeking to where it is uses what's already buffered, and
+  // 'seeked' draws it.
+  showFrame(v) {
+    if (v.readyState >= 2 && v.paused && !this.active().includes(v)) v.currentTime = v.currentTime;
+  },
+
+  // Keeps the other cameras with the master. Small drift is taken up by
+  // running them a little faster or slower; seeking stalls a camera while it
+  // refills its decoder, so it's only for big jumps or while paused.
   onTime(v) {
     if (v !== this.master) return;
     for (const other of this.active()) {
-      if (other !== v && Math.abs(other.currentTime - v.currentTime) > 0.25) {
-        other.currentTime = v.currentTime;
+      if (other === v || other.readyState < 2) continue;
+      const drift = other.currentTime - v.currentTime;
+      if (v.paused || Math.abs(drift) > 1) {
+        if (Math.abs(drift) > 0.1) other.currentTime = v.currentTime;
+        other.playbackRate = this.speed;
+      } else {
+        other.playbackRate = this.speed * (drift > 0.04 ? 0.95 : drift < -0.04 ? 1.05 : 1);
       }
     }
-    if (!this.scrubbing) $('#scrub').value = this.i * 60 + v.currentTime;
+    if (v.duration - v.currentTime < 20) this.prepareNext();
+    if (!this.scrubbing) $('#scrub').value = this.offsets[this.i] + v.currentTime;
     // Frame callbacks keep the clock and HUD in step with the picture, but
     // some browsers stop sending them (a hidden or throttled video): then
     // the regular time updates keep the clock moving.
@@ -743,11 +798,55 @@ const player = {
     else this.pause();
   },
 
+  // Starts the next minute buffering in the spares 20 seconds before this
+  // one ends. Only the master buffers it all: on the Pi's Wi-Fi, the other
+  // cameras' next minute would take bandwidth from this one, so they fetch
+  // just the index and start loading when they're swapped in.
+  prepareNext() {
+    const k = this.i + 1;
+    if (this.prepared === k || k >= this.clips.length) return;
+    this.prepared = k;
+    const clip = this.clips[k];
+    for (const cam of this.cams) {
+      const v = this.spares[cam], file = clip.cameras[cam];
+      v.preload = this.videos[cam] === this.master ? 'auto' : 'metadata';
+      if (file) v.src = mediaURL(file);
+      else unload(v);
+    }
+    this.prefetchTelemetry(clip);
+  },
+
+  // Drops a prepared minute whose cameras no longer match what's watched.
+  discardPrepared() {
+    this.prepared = null;
+    for (const v of Object.values(this.spares)) unload(v);
+  },
+
+  // A decoder can fail when the browser runs short of them (several cameras
+  // plus the next minute buffering). One reload, at the same moment,
+  // recovers; a file that really is damaged keeps its error.
+  recover(cam, v) {
+    const src = v.getAttribute('src');
+    if (this.videos[cam] !== v || v.error?.code !== MediaError.MEDIA_ERR_DECODE || !src || v.dataset.retried === src) return;
+    const at = v.currentTime;
+    v.dataset.retried = src;
+    v.src = src;
+    v.addEventListener('loadedmetadata', () => {
+      v.currentTime = this.master && this.master !== v ? this.master.currentTime : at;
+      if (this.playing && this.active().includes(v)) v.play().catch(() => {});
+    }, { once: true });
+  },
+
+  // Position in the recording, in seconds of real time from its first clip.
+  position() {
+    return (this.offsets?.[this.i] || 0) + (this.master?.currentTime || 0);
+  },
+
   seek(seconds) {
-    const total = this.clips.length * 60;
-    seconds = Math.max(0, Math.min(seconds, total - 0.1));
-    const k = Math.min(Math.floor(seconds / 60), this.clips.length - 1);
-    const offset = seconds - k * 60;
+    seconds = Math.max(0, Math.min(seconds, this.duration - 0.1));
+    let k = 0;
+    while (k + 1 < this.clips.length && this.offsets[k + 1] <= seconds) k++;
+    const offset = seconds - this.offsets[k];
     // only the cameras streaming; the others catch up when they're shown
     const apply = () => {
       for (const v of this.active()) v.currentTime = Math.min(offset, (v.duration || 60) - 0.1);
@@ -755,7 +854,10 @@ const player = {
     if (k !== this.i) {
       const playing = this.playing;
       this.load(k, false);
-      this.master?.addEventListener('loadedmetadata', () => { apply(); if (playing) this.play(); }, { once: true });
+      const ready = () => { apply(); if (playing) this.play(); };
+      // A prepared minute already has its metadata.
+      if (this.master?.readyState >= 1) ready();
+      else this.master?.addEventListener('loadedmetadata', ready, { once: true });
     } else {
       apply();
     }
@@ -829,6 +931,26 @@ const player = {
     });
   },
 
+  cacheTelemetry(url, result) {
+    this.telemetryCache ||= new Map();
+    this.telemetryCache.set(url, result);
+    while (this.telemetryCache.size > 6) this.telemetryCache.delete(this.telemetryCache.keys().next().value);
+  },
+
+  // Reads the next minute's front-camera telemetry ahead, so the HUD carries
+  // on at the switch. The cache holds the pending promise; a failure leaves
+  // the minute to load as usual.
+  prefetchTelemetry(clip) {
+    const file = clip.cameras.front;
+    if (!file) return;
+    const url = telemetryURL(file);
+    if (this.telemetryCache?.has(url)) return;
+    this.cacheTelemetry(url, fetch(url)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((result) => { if (result) this.cacheTelemetry(url, result); else this.telemetryCache.delete(url); return result; })
+      .catch(() => { this.telemetryCache.delete(url); return null; }));
+  },
+
   async loadTelemetry(clip) {
     this.telemetryController?.abort();
     const controller = new AbortController();
@@ -840,15 +962,14 @@ const player = {
     for (const camera of ['front', ...this.cams.filter(c => c !== 'front')]) {
       const file = clip.cameras[camera];
       if (!file) continue;
-      const url = '/api/telemetry/' + encodeURIComponent(file.snapshot) + '/' + file.path.split('/').map(encodeURIComponent).join('/');
+      const url = telemetryURL(file);
       try {
-        let result = this.telemetryCache.get(url);
+        let result = await this.telemetryCache.get(url);
         if (!result) {
           const response = await fetch(url, { signal: controller.signal });
           if (!response.ok) continue;
           result = await response.json();
-          this.telemetryCache.set(url, result);
-          while (this.telemetryCache.size > 6) this.telemetryCache.delete(this.telemetryCache.keys().next().value);
+          this.cacheTelemetry(url, result);
         }
         if (controller.signal.aborted || this.clips[this.i] !== clip) return;
         if (result.samples?.length) {
@@ -868,6 +989,10 @@ const player = {
   renderTelemetry(offset) {
     if (!$('#viewer-telemetry')) return;
     const sample = window.GloveboxTelemetry.at(this.telemetrySamples || [], offset);
+    // Called for every video frame; the HUD only changes with the sample.
+    const shown = [sample, this.speedUnit, this.telemetryState];
+    if ($('#viewer-details').hidden && this.lastSample !== undefined && shown.every((v, k) => v === this.lastSample[k])) return;
+    this.lastSample = shown;
     $('#hud-status').textContent = sample ? '' : this.telemetryState || 'No telemetry for this moment';
     $('#viewer-telemetry').classList.toggle('unavailable', !sample);
     $('#hud-speed').textContent = sample ? window.GloveboxTelemetry.speed(sample.speed_mps, this.speedUnit) : '—';
@@ -924,6 +1049,7 @@ const player = {
     if (!this.master) return; // nothing loaded yet
     const at = this.master.currentTime;
     this.stopFrameUpdates();
+    this.discardPrepared();
     this.pickMaster();
     for (const v of this.active()) if (Math.abs(v.currentTime - at) > 0.25) v.currentTime = at;
     if (this.playing) this.play();
@@ -941,8 +1067,8 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === ' ') { e.preventDefault(); player.playing ? player.pause() : player.play(); }
-  if (e.key === 'ArrowRight') player.seek(player.i * 60 + (player.master?.currentTime || 0) + 5);
-  if (e.key === 'ArrowLeft') player.seek(player.i * 60 + (player.master?.currentTime || 0) - 5);
+  if (e.key === 'ArrowRight') player.seek(player.position() + 5);
+  if (e.key === 'ArrowLeft') player.seek(player.position() - 5);
 });
 
 async function showEvent(kind, id, encrypted) {
