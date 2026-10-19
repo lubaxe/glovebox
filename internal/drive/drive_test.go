@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/lubaxe/glovebox/internal/gadget"
 	"github.com/lubaxe/glovebox/internal/snapshot"
 	"github.com/lubaxe/glovebox/internal/storage"
+	"github.com/lubaxe/glovebox/internal/store"
 	"github.com/lubaxe/glovebox/internal/system"
 )
 
@@ -81,13 +83,15 @@ func (s *fakeSnaps) Release(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.released = append(s.released, id)
-	s.snaps = s.snaps[1:]
+	s.snaps = slices.DeleteFunc(s.snaps, func(x snapshot.Snapshot) bool { return x.ID == id })
 	return nil
 }
 
 func (s *fakeSnaps) Restore(context.Context) error { s.restored = true; return nil }
 
 func (s *fakeSnaps) Compact(context.Context) (int, error) { return 0, nil }
+
+func (s *fakeSnaps) Image(id string) string { return "/snapshots/" + id + "/snap.bin" }
 
 type calls struct {
 	created  []string
@@ -265,12 +269,16 @@ func TestSnapshotNowWaits(t *testing.T) {
 
 func TestCamDiskSize(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		camSize, want int64
+		name                string
+		free, camSize, want int64
 	}{
-		{"as large as fits", 0, 26 << 30},     // 30.5 GiB free - 4 GiB, whole GiB
-		{"capped to fit", 40 << 30, 26 << 30}, // a small card
-		{"as configured", 8 << 30, 8 << 30},
+		// by default half the space, 32 to 64 GiB: the rest keeps drives until home
+		{"default, small card", 61 << 29, 0, 26 << 30}, // 30.5 GiB free - 4 GiB, whole GiB
+		{"default, 64 GB card", 58 << 30, 0, 32 << 30},
+		{"default, 128 GB card", 117 << 30, 0, 58 << 30},
+		{"default, 256 GB card", 235 << 30, 0, 64 << 30},
+		{"capped to fit", 61 << 29, 40 << 30, 26 << 30},
+		{"as configured", 61 << 29, 8 << 30, 8 << 30},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, _, _, _ := newDrive(t)
@@ -280,7 +288,7 @@ func TestCamDiskSize(t *testing.T) {
 				return os.WriteFile(path, nil, 0o644)
 			}
 			d.CamSize, d.MinFree = tc.camSize, 4<<30
-			d.diskSpace = func(string) (int64, int64, error) { return 32 << 30, 61 << 29, nil }
+			d.diskSpace = func(string) (int64, int64, error) { return 256 << 30, tc.free, nil }
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if err := d.Start(ctx); err != nil {
@@ -339,4 +347,87 @@ func TestLowSpaceTakesSnapshotEarly(t *testing.T) {
 	}
 	free.Store(100 << 20) // the car overwrote a lot
 	waitSnaps(2)
+}
+
+type fakeStore struct {
+	captured  map[string]bool
+	failOn    string
+	pruned    int
+	freeAfter func() // what deleting kept clips frees
+}
+
+func (s *fakeStore) Captured(id string) bool { return s.captured[id] }
+func (s *fakeStore) Capture(_ context.Context, id, image, _ string) error {
+	if id == s.failOn {
+		return errors.New("unreadable")
+	}
+	if image != "/snapshots/"+id+"/snap.bin" {
+		return errors.New("wrong image " + image)
+	}
+	s.captured[id] = true
+	return nil
+}
+func (s *fakeStore) Forget(id string) { delete(s.captured, id) }
+func (s *fakeStore) Prune(low func() bool, _ func(string, int64) bool) (int, error) {
+	for low() {
+		s.pruned++
+		s.freeAfter()
+	}
+	return 0, nil
+}
+func (s *fakeStore) Status() store.Status                       { return store.Status{} }
+func (s *fakeStore) Usage(func(string, int64) bool) store.Usage { return store.Usage{} }
+
+// With a clip store, each snapshot's drives are kept and every snapshot but
+// the newest goes, whatever the free space.
+func TestKeepClipsReleasesCapturedSnapshots(t *testing.T) {
+	d, _, s, _ := newDrive(t)
+	st := &fakeStore{captured: map[string]bool{}}
+	d.Store = st
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := d.snapshotOnce(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snaps, _ := s.List()
+	if len(snaps) != 1 || snaps[0].ID != "snap-000003" {
+		t.Errorf("snapshots left = %v, want only the newest", snaps)
+	}
+	if !slices.Equal(s.released, []string{"snap-000001", "snap-000002"}) {
+		t.Errorf("released = %v", s.released)
+	}
+	if !st.captured["snap-000003"] || len(st.captured) != 1 {
+		t.Errorf("captured = %v", st.captured)
+	}
+}
+
+// A snapshot whose clips couldn't be kept isn't released.
+func TestKeepClipsKeepsUncapturedSnapshot(t *testing.T) {
+	d, _, s, _ := newDrive(t)
+	d.Store = &fakeStore{captured: map[string]bool{}, failOn: "snap-000001"}
+	ctx := context.Background()
+	d.snapshotOnce(ctx)
+	d.snapshotOnce(ctx)
+	if len(s.released) != 0 {
+		t.Errorf("released %v although its clips weren't kept", s.released)
+	}
+	if st, _ := d.Status(); st.LastError == "" {
+		t.Error("failure not reported")
+	}
+}
+
+// Low on space with only the newest snapshot left, kept clips go.
+func TestLowSpacePrunesStore(t *testing.T) {
+	d, _, _, _ := newDrive(t)
+	free := int64(1 << 29)
+	d.freeBytes = func(string) (int64, error) { return free, nil }
+	st := &fakeStore{captured: map[string]bool{}, freeAfter: func() { free += 1 << 28 }}
+	d.Store = st
+	if err := d.snapshotOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st.pruned != 2 || free < d.MinFree {
+		t.Errorf("pruned %d, free %d MiB", st.pruned, free>>20)
+	}
 }

@@ -52,8 +52,8 @@ type DriveConfig struct {
 	// reflink-capable (XFS) filesystem mounted at Backingfiles.
 	Enabled      bool   `toml:"enabled"`
 	Backingfiles string `toml:"backingfiles"`
-	// CamSize is the size of the car's drive; 0 means as large as fits
-	// while leaving Snapshots.MinFree.
+	// CamSize is the size of the car's drive; 0 means half of backingfiles,
+	// 32 to 64 GiB, so the rest can keep drives until they're archived.
 	CamSize ByteSize `toml:"cam_size"`
 	// SerialConsole adds a USB serial port to the gadget, so the Pi has a
 	// login console on the same cable.
@@ -160,7 +160,7 @@ func Default() Config {
 			Encryption:      EncryptionConfig{CarCheck: "enforce"},
 		},
 		Snapshots: SnapshotsConfig{
-			Interval: Duration(58 * time.Minute),
+			Interval: Duration(defaultInterval),
 			MinFree:  4 << 30,
 		},
 		System: SystemConfig{Hostname: "glovebox", SetupNetwork: true},
@@ -198,6 +198,12 @@ func LoadFile(path string) (cfg Config, keys int, err error) {
 		return cfg, 0, fmt.Errorf("reading %s: %w", path, err)
 	}
 	cfg.Archive.migrateLegacy(md)
+	// The setup page writes every setting out, defaults too, so a Pi set up
+	// before 0.8.0 has the old default interval in its file. Snapshots are
+	// short-lived since the clip store; more often holds less.
+	if time.Duration(cfg.Snapshots.Interval) == oldDefaultInterval {
+		cfg.Snapshots.Interval = Duration(defaultInterval)
+	}
 	for _, k := range md.Keys() {
 		if md.Type(k...) != "Hash" { // a setting, not a [section] header
 			keys++
@@ -308,3 +314,9 @@ func (s SystemConfig) Validate() error {
 	}
 	return nil
 }
+
+// Snapshot intervals: the default, and the one before 0.8.0.
+const (
+	defaultInterval    = 15 * time.Minute
+	oldDefaultInterval = 58 * time.Minute
+)

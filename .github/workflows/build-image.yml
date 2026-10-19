@@ -122,6 +122,14 @@ jobs:
         run: |
           out="$RUNNER_TEMP/release"
           {
+            # what's new, from docs/releases/<version>.md; the app's update
+            # page shows what comes before "## Install"
+            notes="docs/releases/$GLOVEBOX_VERSION.md"
+            if [ -f "$notes" ]
+            then
+              cat "$notes"
+              echo
+            fi
             echo "## Install"
             echo
             echo "**New card:** flash \`glovebox-$GLOVEBOX_VERSION-image.zip\` with [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (Choose OS > Use custom), put the card in the Pi and plug it into the car's glovebox USB port. After a couple of minutes, join the **Glovebox-XXXX** Wi-Fi network with your phone: a setup wizard opens for your Wi-Fi, backups, extra drives and car."

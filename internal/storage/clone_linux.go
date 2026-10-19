@@ -37,3 +37,16 @@ func Clone(src, dst string) (err error) {
 	}
 	return nil
 }
+
+// CloneRange makes length bytes of dst at dstOff a copy-on-write clone of
+// src at srcOff. Offsets and length must be multiples of the filesystem
+// block size (4 KiB on XFS), except that length may run to the end of src.
+func CloneRange(dst, src *os.File, srcOff, length, dstOff int64) error {
+	err := unix.IoctlFileCloneRange(int(dst.Fd()), &unix.FileCloneRange{
+		Src_fd: int64(src.Fd()), Src_offset: uint64(srcOff), Src_length: uint64(length), Dest_offset: uint64(dstOff),
+	})
+	if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EXDEV) {
+		return fmt.Errorf("%w: %v", ErrNoReflink, err)
+	}
+	return err
+}

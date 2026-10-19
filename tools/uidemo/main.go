@@ -37,6 +37,7 @@ import (
 	"github.com/lubaxe/glovebox/internal/keepawake"
 	"github.com/lubaxe/glovebox/internal/setup"
 	"github.com/lubaxe/glovebox/internal/snapshot"
+	"github.com/lubaxe/glovebox/internal/store"
 	"github.com/lubaxe/glovebox/internal/sysinfo"
 	"github.com/lubaxe/glovebox/internal/system"
 	"github.com/lubaxe/glovebox/internal/update"
@@ -93,7 +94,7 @@ func main() {
 		Version: "demo", Status: fakeStatus{}, Log: logger,
 		Drive: fakeDrive{extras: *extras}, Snapshots: snaps, Clips: lib,
 		Archive: fakeArchive{state: *state}, Car: car, KeepAwake: &fakeKeepAwake{},
-		Setup: demoSetup(*footage),
+		Setup: demoSetup(*footage), Sizing: &fakeSizing{},
 	}
 	s.Update = newFakeUpdater(s, *updates == "available")
 	switch {
@@ -589,3 +590,23 @@ func makeRealDrive(mount, source string) error {
 	}
 	return os.WriteFile(filepath.Join(directory, "event.json"), []byte(fmt.Sprintf("{\"timestamp\":\"%s\",\"reason\":\"Local viewer test\"}", stamp[:10]+"T"+strings.ReplaceAll(stamp[11:], "-", ":"))), 0o644)
 }
+
+// fakeSizing is a 64 GB card set up the old way: the car's drive takes
+// nearly all of it.
+type fakeSizing struct{ recreate int64 }
+
+func (f *fakeSizing) Storage() (drive.Storage, error) {
+	const g = 1 << 30
+	return drive.Storage{
+		Total: 576 * g / 10, Free: 42 * g / 10, MinFree: 4 * g,
+		Car: drive.Car{Size: 52 * g, Allocated: 53 * g, Known: true, Recent: 16 * g, Sentry: 46 * g / 10,
+			Saved: g / 2, Other: g / 10, Free: 31 * g, RecentMinutes: 61},
+		Extras:  []drive.ExtraUsage{},
+		Kept:    store.Usage{Bytes: 118 * g / 10, Minutes: 43, ArchivedBytes: 6 * g, ArchivedMinutes: 22},
+		Outside: 4 * g / 10, Rate: 164 * g / 10, RateMeasured: true,
+		MinCarSize: 25 * g, MaxCarSize: 41 * g, Recreate: f.recreate,
+	}, nil
+}
+
+func (f *fakeSizing) Resize(_ context.Context, size int64) error { f.recreate = size; return nil }
+func (f *fakeSizing) CancelResize() error                        { f.recreate = 0; return nil }

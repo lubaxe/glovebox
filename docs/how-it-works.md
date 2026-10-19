@@ -4,9 +4,11 @@ This is the detailed version. For setup, see the [README](../README.md).
 
 ```
 car ──USB──▶ Glovebox presents /backingfiles/cam_disk.bin as a USB drive
-                 │ every 58 min, when space runs low, and before each backup
+                 │ every 15 min, when space runs low, and before each backup
                  ▼
      copy-on-write snapshot ─▶ fsck the copy ─▶ mount read-only
+                 │
+                 ├──▶ clip store (each new minute of driving, cloned out on its own)
                  │
                  ├──▶ clip index ─▶ web UI (browse and play)
                  └──▶ NAS upload when home (Sentry, then Saved, then Recent, newest first)
@@ -41,15 +43,19 @@ Until the Pi has joined Wi-Fi once (a fresh card without `wifi_ssid`, or a misty
 
 - At startup, before the car can see the drive, Glovebox creates the cam disk if it's missing (exFAT, labelled `CAM`, with a `TeslaCam` folder) or repairs it with `fsck`. The car cuts power without unmounting, so errors are common.
 - The drive is presented over USB using the kernel's configfs gadget. Optionally the same cable also gives a serial login console.
-- The car's drive takes all of `/backingfiles` except `snapshots.min_free` (4 GB): about 52 GB on a 64 GB card. Set `drive.cam_size` for a fixed size.
-- A snapshot is taken every `snapshots.interval` (default 58 minutes, just under the car's one-hour RecentClips buffer, so no minute of driving falls between two snapshots). Each snapshot is repaired with `fsck` (the copy, never the live drive) and mounted read-only. Snapshots with nothing new are skipped.
+- The car's drive takes half of `/backingfiles`, at least 32 GB and at most 64 GB (never more than fits with `snapshots.min_free` to spare): 32 GB on a 64 GB card. The rest keeps drives until the car is home (below). Set `drive.cam_size` for a fixed size. A drive made before this default keeps its size.
+- A snapshot is taken every `snapshots.interval` (default 15 minutes; it must stay under the car's one-hour RecentClips buffer, so no minute of driving falls between two snapshots; a config with the old default, 58 minutes, is read as 15). Each snapshot is repaired with `fsck` (the copy, never the live drive) and mounted read-only. Snapshots with nothing new are skipped.
 - A snapshot taken while the car is mid-write holds a shorter, still readable copy of that clip; the next snapshot has it complete.
-- Snapshots share blocks with the drive, so they only use space for what the car overwrites after them. After each snapshot the oldest ones are deleted until `snapshots.min_free` is free again. Free space is checked every 30 seconds, and once the car has used half the reserve a snapshot is taken early so older ones can go. While driving with a full drive that's about every 6 minutes on HW4.
+- Snapshots share blocks with the drive, so they only use space for what the car overwrites after them. That's everything it records, once its drive has been written full, about 16 GB an hour on HW4, driving or parked on Sentry, so snapshots aren't kept for long. Instead:
+- **The clip store.** After each snapshot, every new Recent clip from a minute of driving is cloned out of the snapshot image on its own into `/backingfiles/clips/` (an XFS reflink of the clip's byte range, found by reading the exFAT directory; the car writes each clip in one run). A kept clip costs nothing until the car writes over it, and then exactly its own size. Then every snapshot but the newest is released.
+- **Parked minutes are left out.** The car records its gear and speed in each clip while it's on, and nothing while parked on Sentry or sitting awake. Once a clip has shown that the car records them, a minute that's all Park, or has none, isn't kept: a day at work with Sentry on costs the Sentry events, which the car saves in `SentryClips` anyway, not eight hours of parking lot. Encrypted clips (the car's own encryption) can't be read, so they're all kept.
+- Free space is checked every 30 seconds, and once the car has used half of `snapshots.min_free` (4 GB) a snapshot is taken early so the older one can go. If space is still short, kept clips are deleted, backed-up ones first, then the oldest; minutes of driving deleted before they were backed up are counted, logged and shown on the home page.
+- **Settings → Storage** shows how the card is used, as one colored bar: the car's recent clips, Sentry and saved clips, the space it records over, extra drives, kept drives (backed up or not yet), and free space. A slider picks how many hours of driving to keep, using your car's own recording rate measured from its clips, and shows the card as it would be. Applying it recreates the car's drive at the new size: only once everything is backed up, after typing ERASE, at the next start. Kept drives stay; the car's drive starts empty.
 - The car sees its drive about **16 seconds** after power-on: the service starts before the network and does its own work (fsck, cleanup, presenting the drive) in about a second.
 
 ## Clip index and web UI
 
-- The index covers Sentry, Saved and Recent clips across every snapshot. Each clip is served from its most complete copy, and clips the car has already deleted stay available from older snapshots.
+- The index covers Sentry, Saved and Recent clips across the snapshots and the clip store. Each clip is served from its most complete copy, and drives the car has already deleted stay available from the clip store.
 - The web UI (`http://<pi>:8080`) has an overview, Sentry, Saved and Recent pages with thumbnails, reasons, city and map links, a player that shows all cameras in sync (clip strip, scrubbing, 1×/2×/4× speed, enlarge a camera, keyboard shortcuts, downloads), the Car page for Bluetooth pairing, and the Settings page for the backup target and extra drives.
 - Tesla's MP4 files don't play in Chromium-based browsers because of their `ctts` box; Glovebox rewrites that box name on the fly while serving, without changing the files.
 - Only indexed clips, thumbnails and `event.json` files can be served; the rest of the drive and the Pi aren't reachable through the media route.

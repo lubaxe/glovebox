@@ -91,19 +91,34 @@ type Summary struct {
 type Snapshot struct {
 	ID    string
 	Mount string
+	// Version changes when the files under Mount do; snapshots never change,
+	// the clip store does.
+	Version int64
 }
 
-// Index merges the clips of all snapshots. Snapshots never change once
-// mounted, so each is scanned only once.
+// Index merges the clips of all snapshots. Each is scanned again only when
+// its Version changes.
 type Index struct {
 	mu     sync.Mutex
 	scans  map[string]*scan
+	best   map[string]File   // path -> most complete copy
 	events map[string]*Event // key: kind/id
 	recent []Clip            // newest first
+	// hide, if set, leaves Recent clips out of the index, e.g. the clip
+	// store's parked minutes, which aren't drives
+	hide func(p string, size int64) bool
 }
 
 // New returns an empty index.
 func New() *Index { return &Index{scans: map[string]*scan{}, events: map[string]*Event{}} }
+
+// HideRecent leaves out the Recent clips hide reports, from the next
+// rebuild on.
+func (x *Index) HideRecent(hide func(p string, size int64) bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.hide = hide
+}
 
 // Refresh brings the index up to date with the given snapshots: new ones
 // are scanned, deleted ones dropped.
@@ -114,7 +129,7 @@ func (x *Index) Refresh(snaps []Snapshot) {
 	current := map[string]bool{}
 	for _, s := range snaps {
 		current[s.ID] = true
-		if _, ok := x.scans[s.ID]; !ok {
+		if sc, ok := x.scans[s.ID]; !ok || sc.version != s.Version {
 			x.scans[s.ID] = scanSnapshot(s)
 			changed = true
 		}
@@ -180,12 +195,13 @@ func (x *Index) File(snapshot, p string) (File, bool) {
 
 // scan is what one snapshot contains.
 type scan struct {
-	files map[string]File              // path -> file
-	info  map[string]map[string]string // event folder path -> event.json
+	version int64
+	files   map[string]File              // path -> file
+	info    map[string]map[string]string // event folder path -> event.json
 }
 
 func scanSnapshot(s Snapshot) *scan {
-	sc := &scan{files: map[string]File{}, info: map[string]map[string]string{}}
+	sc := &scan{version: s.Version, files: map[string]File{}, info: map[string]map[string]string{}}
 	root := filepath.Join(s.Mount, "TeslaCam")
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -271,7 +287,7 @@ func (x *Index) rebuild() {
 		name := parts[len(parts)-1]
 		switch kind := kindOf(parts[1]); kind {
 		case Recent:
-			if m := clipName.FindStringSubmatch(name); m != nil && f.Size >= minClipSize {
+			if m := clipName.FindStringSubmatch(name); m != nil && f.Size >= minClipSize && (x.hide == nil || !x.hide(p, f.Size)) {
 				addToClip(recent, m, f, encrypted)
 			}
 		case Saved, Sentry:
@@ -302,6 +318,7 @@ func (x *Index) rebuild() {
 	}
 	x.events = events
 	x.recent = flatten(recent, true)
+	x.best = best
 }
 
 // eventKey keys an event in Index.events. Encrypted events get their own
@@ -397,4 +414,13 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// Locate returns the most complete copy of the drive file at p in any
+// snapshot, for a caller holding a copy whose snapshot has since gone.
+func (x *Index) Locate(p string) (File, bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	f, ok := x.best[p]
+	return f, ok
 }

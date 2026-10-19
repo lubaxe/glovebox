@@ -17,6 +17,7 @@ import (
 	"github.com/lubaxe/glovebox/internal/gadget"
 	"github.com/lubaxe/glovebox/internal/snapshot"
 	"github.com/lubaxe/glovebox/internal/storage"
+	"github.com/lubaxe/glovebox/internal/store"
 	"github.com/lubaxe/glovebox/internal/system"
 )
 
@@ -36,6 +37,17 @@ type Snapshots interface {
 	Release(ctx context.Context, id string) error
 	Restore(ctx context.Context) error
 	Compact(ctx context.Context) (int, error)
+	Image(id string) string
+}
+
+// ClipStore is the part of store.Store the drive uses.
+type ClipStore interface {
+	Captured(id string) bool
+	Capture(ctx context.Context, id, image, mount string) error
+	Forget(id string)
+	Prune(low func() bool, archived func(rel string, size int64) bool) (int, error)
+	Status() store.Status
+	Usage(archived func(rel string, size int64) bool) store.Usage
 }
 
 // Drive coordinates the cam disk, the USB gadget and snapshots.
@@ -57,6 +69,9 @@ type Drive struct {
 	Archived func(rel string, size int64) bool
 	// Extras are presented after the cam drive, in this order.
 	Extras []Extra
+	// Store keeps the drives out of each snapshot, so snapshots needn't be
+	// kept; nil keeps snapshots until space runs low, as before.
+	Store ClipStore
 
 	Gadget    Gadget
 	Snapshots Snapshots
@@ -92,6 +107,8 @@ type Status struct {
 	Cleanup *Cleanup `json:"cleanup,omitempty"`
 	// Extras are the music, light show and Boombox drives that are on.
 	Extras []ExtraStatus `json:"extras"`
+	// Store is what the clip store holds.
+	Store *store.Status `json:"store,omitempty"`
 }
 
 // New returns a Drive using the real system.
@@ -135,6 +152,13 @@ func (d *Drive) Start(ctx context.Context) error {
 		st.Enabled, st.Files = false, nil
 	}
 	d.removeUnusedExtras(st.Files)
+	if _, err := os.Stat(d.recreateFile()); err == nil {
+		// asked for in Settings, once everything was archived
+		if err := d.recreate(ctx, st.Enabled); err != nil {
+			return fmt.Errorf("recreating the car's drive: %w", err)
+		}
+		st.Enabled = false
+	}
 	if st.Enabled {
 		// The service restarted while the drive stayed connected; the car may
 		// be writing to the image, so leave it alone.
@@ -179,11 +203,20 @@ func (d *Drive) Start(ctx context.Context) error {
 	return nil
 }
 
-// camDiskSize is CamSize, or if that's 0 or doesn't fit, all the free space
-// on backingfiles except MinFree, in whole GiB. The image is sparse, so an
-// oversized one would only fail later, when the car fills it. Snapshots
-// cost nothing until the car overwrites what they hold, and the snapshot
-// loop keeps that within MinFree.
+// Bounds of the cam disk's default size. The car needs room for its rolling
+// hour of Recent clips (~16 GB on HW4) plus its saved and Sentry events;
+// more only takes room from the drives kept until the car is home.
+const (
+	minDefaultCam = 32 << 30
+	maxDefaultCam = 64 << 30
+)
+
+// camDiskSize is CamSize, or if that's 0 half the free space on
+// backingfiles, between 32 and 64 GiB, in whole GiB; never more than fits
+// with MinFree to spare. The rest keeps snapshots and the clip store: what
+// the car records costs space there once the car writes over it, and
+// writing over is all it does once the image is full, so a cam disk that
+// takes nearly everything leaves nowhere to keep a drive until home.
 func (d *Drive) camDiskSize() (int64, error) {
 	_, free, err := d.diskSpace(d.Backingfiles)
 	if err != nil {
@@ -199,7 +232,8 @@ func (d *Drive) camDiskSize() (int64, error) {
 	}
 	switch {
 	case d.CamSize == 0:
-		return fits, nil
+		half := (free - d.extrasReserve()) / 2 / (1 << 30) * (1 << 30)
+		return min(max(half, minDefaultCam), maxDefaultCam, fits), nil
 	case d.CamSize > fits:
 		d.Log.Warn("cam_size doesn't fit with room for snapshots; using what does",
 			"cam_size", d.CamSize, "using", fits)
@@ -321,6 +355,12 @@ func (d *Drive) snapshotOnce(ctx context.Context) error {
 		return err
 	}
 	d.setError(nil)
+	if d.Store != nil {
+		if err := d.keepClips(ctx); err != nil {
+			d.Log.Error("keeping clips failed; keeping the snapshots instead", "err", err)
+			d.setError(err)
+		}
+	}
 	if err := d.pruneSnapshots(ctx); err != nil {
 		d.Log.Error("freeing space failed", "err", err)
 		d.setError(err)
@@ -328,8 +368,36 @@ func (d *Drive) snapshotOnce(ctx context.Context) error {
 	return nil
 }
 
-// pruneSnapshots deletes the oldest snapshots while free space is below
-// MinFree, always keeping the newest one.
+// keepClips moves the drives of every snapshot into the clip store, then
+// releases all but the newest snapshot. What else an older snapshot holds is
+// mostly what the car recorded parked and has since written over, which is
+// what used to fill the card; the newest one still has every event on the
+// drive. A snapshot whose clips couldn't be kept stays, so nothing is lost.
+func (d *Drive) keepClips(ctx context.Context) error {
+	snaps, err := d.Snapshots.List()
+	if err != nil {
+		return err
+	}
+	for _, s := range snaps {
+		if d.Store.Captured(s.ID) {
+			continue
+		}
+		if err := d.Store.Capture(ctx, s.ID, d.Snapshots.Image(s.ID), s.Mount); err != nil {
+			return fmt.Errorf("keeping clips from %s: %w", s.ID, err)
+		}
+	}
+	for _, s := range snaps[:max(len(snaps)-1, 0)] {
+		if err := d.Snapshots.Release(ctx, s.ID); err != nil {
+			return err
+		}
+		d.Store.Forget(s.ID)
+	}
+	return nil
+}
+
+// pruneSnapshots frees space while it's below MinFree: first the oldest
+// snapshots, always keeping the newest one, then kept clips, archived ones
+// first.
 func (d *Drive) pruneSnapshots(ctx context.Context) error {
 	for {
 		free, err := d.freeBytes(d.Backingfiles)
@@ -343,6 +411,9 @@ func (d *Drive) pruneSnapshots(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if len(snaps) <= 1 && d.Store != nil {
+			return d.pruneStore(free)
+		}
 		if len(snaps) <= 1 {
 			d.Log.Warn("low on space but only the newest snapshot is left", "free", free, "min_free", d.MinFree)
 			return nil
@@ -352,6 +423,26 @@ func (d *Drive) pruneSnapshots(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// pruneStore deletes kept clips until free space is back to MinFree. The
+// newest snapshot was just taken, so it holds nothing extra yet: what's
+// short is clips the car has written over since.
+func (d *Drive) pruneStore(free int64) error {
+	d.Log.Info("low on space, deleting kept clips", "free", free, "min_free", d.MinFree)
+	low := func() bool {
+		free, err := d.freeBytes(d.Backingfiles)
+		return err == nil && free < d.MinFree
+	}
+	dropped, err := d.Store.Prune(low, d.Archived)
+	if dropped > 0 {
+		d.Log.Warn("out of space: deleted driving that wasn't archived yet", "minutes", dropped)
+	}
+	if err == nil && low() {
+		free, _ := d.freeBytes(d.Backingfiles)
+		d.Log.Warn("low on space with no kept clips left to delete", "free", free, "min_free", d.MinFree)
+	}
+	return err
 }
 
 // Status reports the drive's current state.
@@ -375,8 +466,10 @@ func (d *Drive) Status() (Status, error) {
 	st.Cleanup = d.lastCleanup
 	d.mu.Unlock()
 	st.Extras = d.extrasStatus()
-	d.mu.Lock()
-	d.mu.Unlock()
+	if d.Store != nil {
+		ss := d.Store.Status()
+		st.Store = &ss
+	}
 	return st, nil
 }
 

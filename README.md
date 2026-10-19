@@ -41,7 +41,7 @@ Glovebox plugs into your Tesla's USB port and becomes its dashcam drive. Your ca
 - **Keeps the car awake until the backup is done.** A sleeping Tesla cuts USB power. Glovebox pairs with your car over Bluetooth and nudges it to stay awake while it backs up, for at most an hour.
 - **Doesn't back up your garage.** Footage the car records while parked at home isn't uploaded, so a long backup doesn't leave more to upload next time. (Parked outside? Turn it on in Settings.)
 - **Never gets in the car's way.** Glovebox never touches the car's drive while the car is using it. It reads footage from instant copy-on-write snapshots, and presents the drive to the car about 16 seconds after power-on.
-- **Bigger dashcam drive, more history.** The car gets nearly the whole card (52 GB on a 64 GB card), and snapshots keep clips the car has already overwritten.
+- **Keeps your drives until you get home.** The car keeps only its last hour. Glovebox keeps every minute of driving, however long you're parked on Sentry in between, and leaves out the hours of parking lot. On a 64 GB card that's about a commute day (HW4 records ~16 GB an hour); a bigger card keeps more.
 - **Clean web app.** A synchronized six-camera player with the speed, gear, steering and Autopilot state the car recorded, Sentry and saved events with thumbnails and locations, your footage grouped into drives, and live status. Works on your phone.
 - **Encrypted on the Pi, with your own key.** The drive only opens once Glovebox has seen your car over Bluetooth, and a recovery key that only you hold opens it anywhere. Unlike the car's own encryption, your clips still play in Glovebox and in the car. See [Encryption](#encryption).
 - **Or keep Tesla's encryption.** If your car encrypts its clips, Glovebox backs them up as they are, and downloads a whole drive or event in one go for you to watch on dashcam.tesla.com.
@@ -181,7 +181,7 @@ The card on its own can't be read. Someone who takes the whole Pi can't browse t
 </picture>
 
 1. **The car records** to Glovebox exactly as it would to a USB stick.
-2. **Glovebox snapshots the drive** every hour, before each backup, and whenever space runs low. Snapshots are instant and only use space for what the car changes afterwards. Everything Glovebox reads comes from a snapshot, so it never touches files the car might be writing.
+2. **Glovebox snapshots the drive** every 15 minutes, before each backup, and whenever space runs low, and keeps each new minute of driving from it. Snapshots and kept clips are instant copy-on-write copies that only use space once the car writes over them. Everything Glovebox reads comes from a snapshot, so it never touches files the car might be writing.
 3. **At home, it backs up.** When your NAS is reachable, Glovebox copies new clips over SMB, NFS, rsync or rclone, verifying each file before marking it done. If the car drives off, it carries on next time.
 4. **The car stays awake** for that first backup after arriving home, at most an hour, so it doesn't cut the power halfway. After that it's free to sleep.
 
@@ -192,7 +192,7 @@ The details, from partitions to power cuts, are in [docs/how-it-works.md](docs/h
 The Glovebox image is Raspberry Pi OS cut down to what a dashcam drive needs, so it downloads faster, boots faster and leaves more of the card for footage.
 
 - **Less than half the size** of Raspberry Pi OS Lite, to download and on the card, with less than half the packages.
-- **Nearly the whole card for footage:** on a 64 GB card the car gets a dashcam drive of about 52 GB, plus a few GB for snapshots.
+- **The card split for keeping drives:** on a 64 GB card the car gets a 32 GB dashcam drive, and the rest keeps your drives until they're backed up.
 - **The car sees its drive about 16 seconds after power-on**, and the Pi is fully booted soon after.
 - **About a third of the Pi Zero 2 W's memory** in use.
 
@@ -219,7 +219,7 @@ No. Everything is set up in the wizard on your phone. `glovebox.toml` on the boo
 Glovebox keeps the car awake only for the first backup after you arrive home, at most an hour, then lets it sleep for at least six hours. Clips the car records while parked are backed up whenever the car is awake anyway, but never keep it awake.
 
 **What happens when the card fills up?**
-The car's drive has a fixed size, and the car manages it like any USB drive. Glovebox clears out backed-up events so the car keeps room for new ones, and drops its oldest snapshots when it needs space.
+The car's drive has a fixed size, and the car manages it like any USB drive. Glovebox clears out backed-up events so the car keeps room for new ones. When the space for kept drives runs low, it deletes backed-up drives first, then the oldest ones, and the home page says so if any weren't backed up yet.
 
 **My car encrypts its recordings. Does Glovebox still work?**
 Yes. Glovebox backs them up as they are and shows them with a lock; watch them at [dashcam.tesla.com](https://dashcam.tesla.com). Or turn off the car's encryption and let Glovebox encrypt the card instead, with a key that's yours; see [Encryption](#encryption).

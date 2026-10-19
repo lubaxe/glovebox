@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,8 +29,10 @@ import (
 	"github.com/lubaxe/glovebox/internal/provision"
 	"github.com/lubaxe/glovebox/internal/setup"
 	"github.com/lubaxe/glovebox/internal/snapshot"
+	"github.com/lubaxe/glovebox/internal/store"
 	"github.com/lubaxe/glovebox/internal/sysinfo"
 	"github.com/lubaxe/glovebox/internal/system"
+	"github.com/lubaxe/glovebox/internal/telemetry"
 	"github.com/lubaxe/glovebox/internal/update"
 	"github.com/lubaxe/glovebox/internal/web"
 	"github.com/lubaxe/glovebox/internal/wifi"
@@ -268,15 +271,23 @@ func (ds *driveStarter) start(ctx context.Context, api *web.Server) {
 			}
 		}
 	}
-	d, snaps := newDrive(cfg, log, state, ds.gadget(), ds.runDir)
+	d, snaps, kept := newDrive(cfg, log, state, ds.gadget(), ds.runDir)
 	// Keep serving the API if the drive can't start, so the problem can
 	// be seen and fixed remotely.
 	if err := d.Start(ctx); err != nil {
 		log.Error("drive failed to start", "err", err)
 		return
 	}
-	lib := clips.NewLibrary(clipSnapshots(snaps))
+	lib := clips.NewLibrary(clipSnapshots(snaps, kept))
+	if kept != nil && !cfg.Archive.RecentAtHome {
+		// minutes the car sat parked aren't drives; someone parked outside who
+		// backs up Recent clips at home wants them, though
+		lib.HideRecent(kept.IsParked)
+	}
 	api.Drive, api.Snapshots, api.Clips = d, snaps, lib
+	if st, ok := api.Setup.(*setup.Setup); ok {
+		api.Sizing = sizing{d, st}
+	}
 	// The Car page works before archiving is set up, so the setup
 	// wizard can pair; keeping the car awake needs archiving.
 	car := ds.car
@@ -324,7 +335,7 @@ func (ds *driveStarter) gadget() drive.Gadget {
 	return g
 }
 
-func newDrive(cfg config.Config, log *slog.Logger, state *archive.State, g drive.Gadget, runDir string) (*drive.Drive, *snapshot.Manager) {
+func newDrive(cfg config.Config, log *slog.Logger, state *archive.State, g drive.Gadget, runDir string) (*drive.Drive, *snapshot.Manager, *store.Store) {
 	runner := system.Exec{Log: log}
 	snaps := snapshot.NewManager(cfg.Drive.Backingfiles, runner, log)
 	snaps.MountRoot = filepath.Join(runDir, "snapshots")
@@ -343,8 +354,34 @@ func newDrive(cfg config.Config, log *slog.Logger, state *archive.State, g drive
 	if state != nil {
 		d.Archived = state.Done
 	}
-	return d, snaps
+	kept, err := store.Open(filepath.Join(cfg.Drive.Backingfiles, "clips"), log)
+	if err != nil {
+		// snapshots then keep the drives, until space runs low
+		log.Error("clip store unavailable", "err", err)
+		return d, snaps, nil
+	}
+	kept.Motion = clipMotion
+	d.Store = kept
+	return d, snaps, kept
 }
+
+// clipMotion reads from the gear and speed the car records in a clip whether
+// it moved.
+func clipMotion(ctx context.Context, r io.ReaderAt, size int64) (store.Motion, error) {
+	res, err := telemetry.Extract(ctx, r, size)
+	if err != nil || len(res.Samples) == 0 {
+		return store.NoTelemetry, err
+	}
+	for _, s := range res.Samples {
+		if s.Gear != gearPark || s.Speed > 0.3 {
+			return store.Moving, nil
+		}
+	}
+	return store.Parked, nil
+}
+
+// gearPark is Park in Tesla's dashcam schema.
+const gearPark = 0
 
 func newArchiver(cfg config.Config, lib *clips.Library, d *drive.Drive, st *archive.State, log *slog.Logger, runDir string) (*archive.Archiver, error) {
 	target, err := archive.NewTarget(cfg.Archive, archiveOptions(log, runDir))
@@ -370,8 +407,9 @@ func archiveOptions(log *slog.Logger, runDir string) archive.Options {
 	return archive.Options{Runner: system.Exec{Log: log}, RunDir: runDir}
 }
 
-// clipSnapshots lists the snapshot manager's snapshots for the clip library.
-func clipSnapshots(m *snapshot.Manager) func() ([]clips.Snapshot, error) {
+// clipSnapshots lists the snapshot manager's snapshots, and the clip store
+// if there is one, for the clip library.
+func clipSnapshots(m *snapshot.Manager, kept *store.Store) func() ([]clips.Snapshot, error) {
 	return func() ([]clips.Snapshot, error) {
 		snaps, err := m.List()
 		if err != nil {
@@ -380,6 +418,9 @@ func clipSnapshots(m *snapshot.Manager) func() ([]clips.Snapshot, error) {
 		out := make([]clips.Snapshot, len(snaps))
 		for i, s := range snaps {
 			out[i] = clips.Snapshot{ID: s.ID, Mount: s.Mount}
+		}
+		if kept != nil {
+			out = append(out, clips.Snapshot{ID: store.ID, Mount: kept.Dir, Version: kept.Version()})
 		}
 		return out, nil
 	}
@@ -480,3 +521,30 @@ func (g *noGadget) State() (gadget.State, error) {
 	defer g.mu.Unlock()
 	return g.st, nil
 }
+
+// sizing changes the size of the car's drive: the drive recreates it at the
+// next start, and the size goes in the config so it sticks.
+type sizing struct {
+	d *drive.Drive
+	s *setup.Setup
+}
+
+func (z sizing) Storage() (drive.Storage, error) { return z.d.Storage() }
+
+func (z sizing) Resize(ctx context.Context, size int64) error {
+	if err := z.d.RequestRecreate(size); err != nil {
+		return err
+	}
+	if err := z.s.SetCamSize(size); err != nil {
+		_ = z.d.CancelRecreate()
+		return err
+	}
+	// keep the newest minutes of driving before the drive goes
+	if err := z.d.SnapshotNow(ctx); err != nil {
+		_ = z.d.CancelRecreate()
+		return fmt.Errorf("taking a last snapshot: %w", err)
+	}
+	return nil
+}
+
+func (z sizing) CancelResize() error { return z.d.CancelRecreate() }

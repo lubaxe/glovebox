@@ -401,3 +401,19 @@ func parseGateway(routes string) string {
 	}
 	return ""
 }
+
+// SetCamSize stores the size of the car's drive, used when it's next
+// created.
+func (s *Setup) SetCamSize(size int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg, err := s.load()
+	if err != nil {
+		return err
+	}
+	cfg.Drive.CamSize = config.ByteSize(size)
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return s.write(cfg)
+}

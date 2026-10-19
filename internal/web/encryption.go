@@ -62,10 +62,7 @@ func (s *Server) readiness(st crypt.Status) readiness {
 	if s.Car != nil {
 		_, rd.Car = s.Car.Paired()
 	}
-	if s.Archive != nil {
-		a := s.Archive.Status()
-		rd.Archived = a.Last != nil && a.Last.Err == "" && a.Last.Failed == 0 && a.Last.Pending == 0
-	}
+	rd.Archived, _ = s.archivedAll()
 	return rd
 }
 

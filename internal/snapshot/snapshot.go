@@ -450,3 +450,6 @@ func readMeta(dir string) (Snapshot, error) {
 	}
 	return snap, json.Unmarshal(b, &snap)
 }
+
+// Image is the path of a snapshot's disk image.
+func (m *Manager) Image(id string) string { return filepath.Join(m.Dir, id, imageName) }

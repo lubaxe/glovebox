@@ -416,6 +416,8 @@ a.stat:hover { border-color: var(--border); }
 .cam.missing video { visibility: hidden; }
 /* the next minute, buffering behind the one showing */
 .cam video.spare { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+/* the minute that just ended, on its last frame until the next one has a frame */
+.cam video.spare.leaving { opacity: 1; z-index: 1; }
 .cam.missing::after {
   content: "not recorded";
   position: absolute; inset: 0;
@@ -639,8 +641,10 @@ textarea { width: 100%; font-family: var(--mono); font-size: 13px; resize: verti
   .cams, .cams.focused { grid-template-columns: repeat(2, 1fr); }
   .controls { flex-wrap: wrap; }
   .controls input[type=range] { order: 10; flex-basis: 100%; }
-  .car-layout { grid-template-columns: 1fr; }
-  .step { grid-template-columns: 1fr; gap: 8px; padding: 18px; }
+  .car-layout { grid-template-columns: minmax(0, 1fr); }
+  .step { grid-template-columns: 28px 1fr; gap: 12px; padding: 18px; }
+  .step .step-num { width: 28px; height: 28px; font-size: 12px; }
+  .step .step-num svg { width: 15px; height: 15px; }
   .chips .chip.minor { display: none; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .stat { min-height: 0; padding: 14px; }
@@ -881,3 +885,115 @@ input, select { font-size: 14px; }
 /* a phone: the time is shown top left, and the controls need the room */
 @media(max-width: 420px) { .cinema-viewer .clock { display: none; } }
 @media(max-height: 480px) and (min-width: 600px) { .viewer-hud { top: 8px; } .viewer-rail { flex-basis: 74px; } .camera-choice { height: 60px; } .cinema-viewer .controls input[type=range] { order: initial; flex-basis: auto; } }
+
+/* Storage usage bar, like a phone's: one color per use. */
+:root {
+  --u-recent: #7fb0ff;
+  --u-sentry: #f2a07f;
+  --u-saved: #f3c96b;
+  --u-other: #8a98ac;
+  --u-extras: #b9a1f5;
+  --u-kept: #6fcf9c;
+  --u-pending: #4fa3c7;
+  --u-work: #5b6779;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --u-recent: #3b78d8;
+    --u-sentry: #e0704a;
+    --u-saved: #d8a224;
+    --u-other: #8592a6;
+    --u-extras: #8466d6;
+    --u-kept: #2f9e63;
+    --u-pending: #1f7fa8;
+    --u-work: #aab4c3;
+  }
+}
+.usage-bar { display: flex; height: 22px; border-radius: 7px; overflow: hidden; background: var(--surface-3); margin: 14px 0 12px; }
+.usage-seg { display: block; height: 100%; min-width: 2px; box-shadow: -1px 0 0 var(--surface) inset; }
+.usage-seg:last-child { box-shadow: none; }
+.u-recent { background: var(--u-recent); }
+.u-sentry { background: var(--u-sentry); }
+.u-saved { background: var(--u-saved); }
+.u-other { background: var(--u-other); }
+.u-extras { background: var(--u-extras); }
+.u-kept { background: var(--u-kept); }
+.u-pending { background: var(--u-pending); }
+.u-work { background: var(--u-work); }
+.u-free { background: var(--surface-3); }
+/* space the car records over: its own color, striped, since it's taken but holds nothing */
+.u-carfree { background: repeating-linear-gradient(135deg, var(--u-recent) 0 3px, transparent 3px 7px); opacity: .55; }
+.usage-bar.thin { height: 10px; border-radius: 5px; margin: 12px 0 6px; }
+.usage-dot { width: 12px; height: 12px; border-radius: 4px; flex-shrink: 0; }
+.usage-dot.u-free { box-shadow: 0 0 0 1px var(--border) inset; }
+
+/* A list of short rows: dot, name (with an optional tip and a second line), value. */
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.rows li:first-child { border-top: 0; }
+.row-name { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; }
+.row-name small { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.row-value { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.row-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+.sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0 14px; }
+
+/* "?" with a short explanation on tap */
+.tip { position: relative; display: inline-block; vertical-align: middle; margin-left: 6px; font-size: 14px; }
+.tip > summary { list-style: none; cursor: pointer; width: 18px; height: 18px; position: relative; border-radius: 50%; display: inline-grid; place-items: center;
+  font-size: 11px; font-weight: 700; color: var(--muted); border: 1px solid var(--border); line-height: 1; }
+.tip > summary::-webkit-details-marker { display: none; }
+.tip[open] > summary { color: var(--on-action); background: var(--action); border-color: var(--action); }
+.tip-body { position: fixed; z-index: 50; left: 10px; top: 0; width: max-content; max-width: min(260px, calc(100vw - 20px));
+  padding: 9px 11px; border-radius: var(--radius-sm); background: var(--surface-3); border: 1px solid var(--border);
+  box-shadow: var(--shadow); font-size: 13px; font-weight: 400; line-height: 1.45; color: var(--text); white-space: normal; text-align: left; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600;
+  background: var(--surface-3); color: var(--muted); }
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill-ok { color: var(--ok); }
+.pill-warn { color: var(--warn); }
+.pill-bad { color: var(--bad); }
+.pill-busy { color: var(--accent); }
+.btn-danger { background: var(--bad); border-color: var(--bad); color: var(--bg); }
+.btn-danger:disabled { opacity: .45; }
+
+.storage-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.storage-head h3 { margin: 0; }
+.storage-head b { color: var(--text); }
+.keep-head { display: flex; align-items: center; justify-content: space-between; }
+.keep-head h4 { margin: 0; display: flex; align-items: center; gap: 6px; }
+.keep-value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+/* the slider: a finger-sized handle on a thin track */
+.panel input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 40px; margin: 4px 0 0; padding: 0;
+  background: transparent; border: 0; touch-action: pan-y; cursor: pointer; }
+.panel input[type=range]:focus { outline: none; }
+.panel input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--surface-3); }
+.panel input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--surface-3); }
+.panel input[type=range]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--action); }
+.panel input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; margin-top: -11px; border-radius: 50%;
+  background: var(--action); border: 3px solid var(--surface); box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }
+.panel input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--action);
+  border: 3px solid var(--surface); box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }
+.panel input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--focus); outline-offset: 2px; }
+.keep-scale { display: flex; justify-content: space-between; font-size: 12px; }
+.keep-note { font-size: 13px; }
+.confirm-box { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--bad); background: var(--surface-2); }
+.confirm-box .row-line { margin-top: 10px; }
+.confirm-box input { max-width: 150px; }
+.settings-top { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+.settings-top .settings-tabs { flex: 1; margin-bottom: 0; min-width: 0; overflow-x: auto; }
+@media (max-width: 860px) { .settings-top { flex-direction: column-reverse; align-items: stretch; } .settings-top > .btn { align-self: flex-end; } }
+/* a bigger tap area for the "?" without a bigger circle */
+.tip > summary::after { content: ""; position: absolute; inset: -10px; }
+.row-name .tip, .keep-head .tip { margin-left: 0; }
+/* a panel that folds away what is rarely needed */
+.panel.fold { margin-top: 0; padding-top: 14px; padding-bottom: 14px; }
+.panel.fold > summary { cursor: pointer; font-weight: 600; font-size: 14px; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+.panel.fold > summary::-webkit-details-marker { display: none; }
+.panel.fold > summary::after { content: "›"; color: var(--muted); font-size: 18px; transition: transform .15s; }
+.panel.fold[open] > summary::after { transform: rotate(90deg); }
+.panel.fold[open] > summary { margin-bottom: 14px; }
+.panel.fold .step { box-shadow: none; border: 0; background: none; padding: 0; }
+.panel.fold .steps { gap: 22px; }
+.panel.fold .row { flex-wrap: wrap; }
+.panel.fold .vin-input { min-width: 0; flex: 1 1 160px; }

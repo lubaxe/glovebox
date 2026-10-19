@@ -296,8 +296,17 @@ function renderOverviewStats() {
 
   if (status.drive) {
     const d = status.drive;
-    cards.push(stat('', 'disk', 'Snapshot space', `${gb(d.backingfiles_free_bytes)} free`,
-      'Older snapshots are cleared automatically when space runs low.'));
+    const s = d.store;
+    if (s) {
+      // minutes of driving deleted for space before they were backed up, in the last day
+      const lost = s.dropped && Date.now() - new Date(s.dropped_at) < 864e5;
+      cards.push(stat(lost ? 'warn' : '', 'disk', 'Kept drives',
+        `${fmtHours(s.minutes / 60)} · ${gb(d.backingfiles_free_bytes)} free`,
+        lost ? `${s.dropped} min deleted before backup` : null, null, '#/settings/storage'));
+    } else {
+      cards.push(stat('', 'disk', 'Snapshot space', `${gb(d.backingfiles_free_bytes)} free`,
+        'Oldest cleared when low.'));
+    }
     const extras = d.extras || [];
     if (extras.length) {
       const failed = extras.find((x) => x.last_error);
@@ -349,7 +358,7 @@ async function showOverview() {
   const latest = $('#latest');
   if (!events.length && !minutes.length) {
     latest.append(el('div', { class: 'section-head' }, el('h2', {}, 'Footage')),
-      empty('film', 'No footage yet', 'Once the car records to Glovebox, its Sentry events, saved clips and driving footage show up here.'));
+      empty('film', 'No footage yet', 'Recordings show up here.'));
     return;
   }
   if (events.length) {
@@ -363,12 +372,11 @@ async function showOverview() {
       el('div', { class: 'section-head' },
         el('h2', {}, 'Latest drives'),
         el('a', { href: '#/recent' }, `All ${ds.length} →`)),
-      locked ? el('p', { class: 'muted', style: 'margin:-6px 0 12px' },
-        `${locked === minutes.length ? 'All of this footage is' : 'Some of this footage is'} encrypted by your car: open a drive to download it for dashcam.tesla.com.`) : '', // append() writes null as "null"
+      locked ? el('p', { class: 'muted', style: 'margin:-6px 0 12px' }, pill('warn', 'Encrypted by the car'),
+        tip('Open a drive to download it for dashcam.tesla.com.')) : '', // append() writes null as "null"
       el('div', { class: 'grid' }, ds.slice(0, 4).map(driveCard)));
     if (!events.length) {
-      latest.append(el('p', { class: 'muted', style: 'margin-top:18px;font-size:14px' },
-        'No Sentry or saved events yet. They show up here when Sentry Mode records something or you save a clip in the car.'));
+      latest.append(el('p', { class: 'muted', style: 'margin-top:18px;font-size:14px' }, 'No Sentry or saved events yet.'));
     }
   }
 }
@@ -501,11 +509,10 @@ async function showRecent() {
   }
   if (current !== 'recent') return;
   if (!clips.length) {
-    page('recent', 'Recent', empty('film', 'No recent clips yet', 'The car\'s rolling dashcam footage shows up here, minute by minute.'));
+    page('recent', 'Recent', empty('film', 'No drives yet', 'Driving shows up here.'));
     return;
   }
-  const nodes = [el('p', { class: 'muted', style: 'margin-top:0' },
-    'The car keeps about an hour of driving footage and overwrites it as it goes. Glovebox keeps copies in its snapshots, and backs them up when the car is home.')];
+  const nodes = [];
   let day = '';
   let grid;
   for (const d of drives(clips)) {
@@ -529,12 +536,13 @@ function encryptedNotice(zipURL, bytes) {
     el('span', { class: 'stat-icon' }, icon('lock')),
     el('div', {},
       el('h3', {}, 'Encrypted by your car'),
-      el('p', {}, 'Your Tesla has "Encrypt Dashcam Recordings" turned on, so only the car, or dashcam.tesla.com signed in to your Tesla account, can play these clips. Download them as one zip, unzip it, and drop the files on dashcam.tesla.com. Tesla\'s site only takes files from your computer, so Glovebox can\'t send them there directly.'),
+      el('p', {}, 'Play these at dashcam.tesla.com: download, unzip, drop the files there. ',
+        tip('The car\'s "Encrypt Dashcam Recordings" is on, so only Tesla can play them. Its site only takes files from your computer.')),
       el('div', { class: 'actions' },
         go,
         el('a', { class: 'btn', href: 'https://dashcam.tesla.com', target: '_blank', rel: 'noopener' }, 'Just open the site', icon('external'))),
       el('p', { class: 'muted', style: 'margin:12px 0 0;font-size:13px' },
-        'The download comes from the Pi over Wi-Fi, at about 3–5 MB/s. If these clips are already backed up, opening them from the EncryptedClips folder on your NAS is much faster.')));
+        'About 3–5 MB/s over Wi-Fi. ', tip('Already backed up? The EncryptedClips folder on your NAS is faster.'))));
 }
 
 function minuteRows(clips) {
@@ -686,7 +694,7 @@ const player = {
         old.classList.add('spare');
         this.videos[cam] = next;
         this.spares[cam] = old;
-        unload(old);
+        this.handOver(old, next);
       } else {
         old.pause();
         if (file) old.src = this.source(file);
@@ -710,6 +718,25 @@ const player = {
     $('#prev').disabled = i === 0;
     $('#next').disabled = i + 1 >= this.clips.length;
     if (autoplay) this.play();
+  },
+
+  // handOver keeps the minute that ended on screen, on its last frame,
+  // until the next one has drawn its first: the new video shows black until
+  // then, which blinked at every minute.
+  handOver(old, next) {
+    this.finishHandOver(old);
+    old.classList.add('leaving');
+    const done = () => this.finishHandOver(old);
+    old.handOverTimer = setTimeout(done, 1500); // a camera that's slow to load
+    if (next.requestVideoFrameCallback) next.requestVideoFrameCallback(() => done());
+    else next.addEventListener('timeupdate', done, { once: true });
+  },
+
+  finishHandOver(old) {
+    if (!old.classList.contains('leaving')) return;
+    clearTimeout(old.handOverTimer);
+    old.classList.remove('leaving');
+    unload(old);
   },
 
   setPlayIcon(name) {
@@ -768,7 +795,10 @@ const player = {
     this.stopFrameUpdates();
     this.telemetryController?.abort();
     this.telemetrySamples = [];
+    clearTimeout(this.telemetryHoldTimer);
+    this.telemetryHold = false;
     this.playing = false;
+    for (const v of Object.values(this.spares || {})) this.finishHandOver(v);
     for (const v of [...Object.values(this.videos), ...Object.values(this.spares || {})]) unload(v);
     this.videos = {};
     this.spares = {};
@@ -826,6 +856,7 @@ const player = {
     const clip = this.clips[k];
     for (const cam of this.cams) {
       const v = this.spares[cam], file = clip.cameras[cam];
+      this.finishHandOver(v);
       v.preload = this.lowBandwidth || this.videos[cam] === this.master ? 'auto' : 'metadata';
       if (file) v.src = this.source(file);
       else unload(v);
@@ -836,7 +867,7 @@ const player = {
   // Drops a prepared minute whose cameras no longer match what's watched.
   discardPrepared() {
     this.prepared = null;
-    for (const v of Object.values(this.spares)) unload(v);
+    for (const v of Object.values(this.spares)) { this.finishHandOver(v); unload(v); }
   },
 
   // A decoder can fail when the browser runs short of them (several cameras
@@ -946,17 +977,22 @@ const player = {
     this.lastThumbnailDraw = performance.now();
     const mosaic = this.thumbnailCanvases?.grid;
     const grid = mosaic?.getContext('2d');
-    grid?.clearRect(0, 0, mosaic.width, mosaic.height);
+    const columns = Math.min(3, this.cams.length), rows = Math.ceil(this.cams.length / columns);
     this.cams.forEach((cam, index) => {
       const canvas = this.thumbnailCanvases?.[cam], video = this.videos[cam];
       if (!canvas) return;
       const context = canvas.getContext('2d');
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      if (!video || video.readyState < 2 || !video.getAttribute('src')) return;
+      const tile = [index % columns * mosaic.width / columns, Math.floor(index / columns) * mosaic.height / rows, mosaic.width / columns, mosaic.height / rows];
+      if (!video?.getAttribute('src')) { // not recorded this minute
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        grid?.clearRect(...tile);
+        return;
+      }
+      // still loading: keep the last picture rather than going blank
+      if (video.readyState < 2) return;
       try {
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const columns = Math.min(3, this.cams.length), rows = Math.ceil(this.cams.length / columns);
-        grid?.drawImage(video, index % columns * mosaic.width / columns, Math.floor(index / columns) * mosaic.height / rows, mosaic.width / columns, mosaic.height / rows);
+        grid?.drawImage(video, ...tile);
       } catch { /* A camera still seeking will draw on its next frame. */ }
     });
   },
@@ -985,10 +1021,28 @@ const player = {
     this.telemetryController?.abort();
     const controller = new AbortController();
     this.telemetryController = controller;
-    this.telemetrySamples = [];
-    this.telemetryState = 'Reading recorded telemetry…';
-    this.renderTelemetry(0);
     this.telemetryCache ||= new Map();
+    clearTimeout(this.telemetryHoldTimer);
+    // Read ahead already: no gap at all.
+    const ahead = clip.cameras.front && this.telemetryCache.get(telemetryURL(clip.cameras.front));
+    if (ahead && !(ahead instanceof Promise) && ahead.samples?.length) {
+      this.telemetryHold = false;
+      this.telemetrySamples = ahead.samples;
+      this.telemetryState = '';
+      this.lastSample = undefined;
+      this.renderTelemetry(0);
+      return;
+    }
+    // Otherwise the HUD keeps showing what it did for a moment, rather than
+    // blanking for what's usually a fraction of a second.
+    this.telemetryHold = true;
+    this.telemetryHoldTimer = setTimeout(() => {
+      if (this.telemetryController !== controller || !this.telemetryHold) return;
+      this.telemetryHold = false;
+      this.telemetrySamples = [];
+      this.telemetryState = 'Reading recorded telemetry…';
+      this.renderTelemetry(this.master?.currentTime || 0);
+    }, 1000);
     for (const camera of ['front', ...this.cams.filter(c => c !== 'front')]) {
       const file = clip.cameras[camera];
       if (!file) continue;
@@ -1003,6 +1057,7 @@ const player = {
         }
         if (controller.signal.aborted || this.clips[this.i] !== clip) return;
         if (result.samples?.length) {
+          this.telemetryHold = false;
           this.telemetrySamples = result.samples;
           this.telemetryState = '';
           this.renderTelemetry(this.master?.currentTime || 0);
@@ -1011,13 +1066,15 @@ const player = {
       } catch (error) { if (controller.signal.aborted) return; }
     }
     if (!controller.signal.aborted && this.clips[this.i] === clip) {
+      this.telemetryHold = false;
+      this.telemetrySamples = [];
       this.telemetryState = 'No telemetry recorded in this clip';
       this.renderTelemetry(this.master?.currentTime || 0);
     }
   },
 
   renderTelemetry(offset) {
-    if (!$('#viewer-telemetry')) return;
+    if (!$('#viewer-telemetry') || this.telemetryHold) return;
     const sample = window.GloveboxTelemetry.at(this.telemetrySamples || [], offset);
     // Called for every video frame; the HUD only changes with the sample.
     const shown = [sample, this.speedUnit, this.telemetryState];
@@ -1034,16 +1091,18 @@ const player = {
     $('#hud-left').classList.toggle('active', !!sample?.left);
     $('#hud-right').classList.toggle('active', !!sample?.right);
     $('#hud-brake').classList.toggle('active', !!sample?.brake);
-    $('#hud-throttle').textContent = sample ? Math.round(sample.accelerator * 100) + '%' : '—';
-    $('#hud-throttle').style.setProperty('--pedal', (Math.max(0, Math.min(1, sample?.accelerator || 0)) * 100) + '%');
+    // The car records the pedal as a percentage already, 0 to 100.
+    const pedal = Math.max(0, Math.min(100, sample?.accelerator || 0));
+    $('#hud-throttle').textContent = sample ? Math.round(pedal) + '%' : '—';
+    $('#hud-throttle').style.setProperty('--pedal', pedal + '%');
     $('#hud-steering').classList.toggle('assisted', !!sample && sample.autopilot > 0);
-    $('#hud-throttle').title = sample ? 'Recorded accelerator pedal: ' + (sample.accelerator * 100).toFixed(1) + '% (not motor power)' : 'No recorded accelerator data';
+    $('#hud-throttle').title = sample ? 'Accelerator pedal: ' + pedal.toFixed(1) + '% (not motor power)' : 'No recorded accelerator data';
     if (!$('#viewer-details').hidden) {
       const rows = sample ? [
         ['Speed', window.GloveboxTelemetry.speed(sample.speed_mps, this.speedUnit) + (this.speedUnit === 'kmh' ? ' km/h' : ' mph')],
         ['Gear', ['Park', 'Drive', 'Reverse', 'Neutral'][sample.gear] || 'Unknown'],
         ['Steering wheel', sample.steering_deg.toFixed(1) + '°'],
-        ['Accelerator', (sample.accelerator * 100).toFixed(1) + '%'],
+        ['Accelerator pedal', pedal.toFixed(1) + '%'],
         ['Brake', sample.brake ? 'Applied' : 'Released'],
         ['Turn signals', [sample.left ? 'Left' : '', sample.right ? 'Right' : ''].filter(Boolean).join(' + ') || 'Off'],
         ['Driving assistance', ['None', 'Self-driving', 'Autosteer', 'Traffic-aware cruise'][sample.autopilot] || 'Unknown'],
@@ -1176,7 +1235,7 @@ async function showDrive(start, encrypted) {
   if (current !== name) return;
   const d = drives(all).find((x) => x.encrypted === encrypted && x.clips.some((c) => c.start === start));
   if (!d) {
-    page(name, 'Recent', empty('film', 'That drive is gone', 'Its snapshots have been cleared to make room.'));
+    page(name, 'Recent', empty('film', 'That drive is gone', 'It was cleared to make room.'));
     return;
   }
   const title = `${fmtDay(d.first)}, ${driveRange(d)}`;
@@ -1287,7 +1346,7 @@ async function showCar() {
   const pairBtn = el('button', { type: 'button', class: car.paired && !oldKey ? '' : 'btn-primary', disabled: !hasVIN }, icon('card'), 'Send pairing request');
   pairBtn.addEventListener('click', () => runStep(pairBtn, pairOut, 'Talking to the car over Bluetooth…', async () => {
     await send('POST', '/api/car/pair');
-    return 'Sent. Now lay your key card on the phone pad and confirm on the car\'s screen.';
+    return 'Sent. Key card on the phone pad, then confirm on screen.';
   }));
 
   // 3. check
@@ -1302,30 +1361,25 @@ async function showCar() {
     el('div', { class: stepState(hasVIN, !hasVIN, true) },
       el('span', { class: 'step-num' }, hasVIN ? icon('check') : '1'),
       el('div', {},
-        el('h3', {}, 'Your car\'s VIN'),
-        el('p', {}, 'Find it in the car under Controls → Software, or in the Tesla app. Glovebox uses it to find your car over Bluetooth.'),
+        el('h3', {}, 'VIN', tip('Controls → Software, or the Tesla app. Used to find the car over Bluetooth.')),
         el('div', { class: 'row' }, vin, vinBtn), vinOut)),
     el('div', { class: stepState(car.paired, hasVIN && !car.paired, hasVIN) },
       el('span', { class: 'step-num' }, car.paired ? icon('check') : '2'),
       el('div', {},
-        el('h3', {}, 'Pair with a key card'),
-        el('p', {}, 'Sit in the car with the Pi plugged in and one of your key cards. Then:'),
+        el('h3', {}, 'Pair', tip('In the car, Pi plugged in, key card in hand.')),
         el('ol', {},
-          el('li', {}, 'Press ', el('b', {}, 'Send pairing request'), '. Nothing shows on the car\'s screen yet.'),
-          el('li', {}, 'Within 30 seconds, lay the ', el('b', {}, 'key card flat on the phone charging pad'), ' beneath the touchscreen (the card reader is underneath) and hold it for a moment.'),
-          el('li', {}, 'The car asks you to confirm a new key. Accept it.')),
+          el('li', {}, 'Press ', el('b', {}, 'Send pairing request')),
+          el('li', {}, 'Within 30 s, lay a ', el('b', {}, 'key card on the phone pad')),
+          el('li', {}, 'Accept the new key on screen')),
         padArt(),
         el('div', { class: 'row' }, pairBtn), pairOut)),
     el('div', { class: stepState(car.paired, false, hasVIN) },
       el('span', { class: 'step-num' }, car.paired ? icon('check') : '3'),
       el('div', {},
-        el('h3', {}, car.paired ? 'Paired' : 'Check that it worked'),
-        el('p', {}, car.paired
-          ? `The car accepted Glovebox's key${car.paired_at ? ` on ${new Date(car.paired_at).toLocaleDateString()}` : ''}. Keep-awake is active.`
-          : 'Glovebox asks the car for its charge level using the new key. That only works once the car has accepted it.'),
-        oldKey ? el('p', { class: 'notice-text' }, el('b', {}, 'Pair again: '),
-          'this is an older Charging Manager key, and the car won\'t let it do what keeps it awake, so backups stop after about 12 minutes. ',
-          'Pairing again makes a new key with the Driver role. Then remove the old one under Controls → Locks → Keys.') : null,
+        el('h3', {}, car.paired ? 'Paired' : 'Check'),
+        car.paired ? el('p', { class: 'muted' }, car.paired_at ? new Date(car.paired_at).toLocaleDateString() : '') : null,
+        oldKey ? el('p', {}, pill('warn', 'Pair again'),
+          tip('This older Charging Manager key can\'t keep the car awake. Pair again, then remove the old key in Controls → Locks → Keys.')) : null,
         el('div', { class: 'row' }, checkBtn), checkOut)));
 
   // side panel: what the key can do, and the car's state
@@ -1341,30 +1395,34 @@ async function showCar() {
   }));
   const forget = el('button', { type: 'button', class: 'btn-quiet', disabled: !hasVIN }, 'Forget this car');
   forget.addEventListener('click', async () => {
-    if (!confirm('Forget the VIN and pairing here? The key stays in the car until you remove it under Controls → Locks → Keys.')) return;
+    if (!confirm('Forget this car? Remove the key in the car too (Controls → Locks → Keys).')) return;
     await send('POST', '/api/car/forget');
     showCar();
   });
 
-  const side = el('div', { class: 'side' },
-    el('div', { class: 'panel', style: 'margin-top:0' },
-      el('h3', { style: 'margin:0 0 4px;font-size:16px' }, 'Why pair?'),
-      el('p', { class: 'muted', style: 'margin:0' }, 'A sleeping car turns off its USB ports, which would cut an upload short. While Glovebox backs up what the car recorded away from home, it keeps the car awake, for at most an hour. Every minute it:'),
+  const why = el('div', { class: 'panel', style: 'margin-top:0' },
+      el('h3', { style: 'margin:0 0 4px;font-size:16px' }, car.paired ? 'What the key does' : 'Why pair?',
+        tip('A sleeping car cuts USB power. Glovebox keeps it awake while backing up, at most an hour.')),
       el('ul', { class: 'can-list' },
         el('li', { class: 'yes' }, icon('check'), 'Wakes the car'),
-        el('li', { class: 'yes' }, icon('check'), 'Asks it to close the charge port (nothing moves with a cable plugged in)'),
-        el('li', { class: 'yes' }, icon('check'), 'Re-sets its charging current, to the same value')),
-      el('p', { class: 'muted', style: 'margin:12px 0 0;font-size:13px' },
-        'Closing the charge port is what keeps the car awake, and the car only allows it from a key with the ', el('b', {}, 'Driver'), ' role. ',
-        'Glovebox never sends anything else, and the key doesn\'t open the doors as you walk up the way a phone does. ',
-        'But someone who took the Pi could use the key to unlock and drive the car, so turn on ', el('b', {}, 'PIN to Drive'),
-        ' (Controls → Safety). Remove the key any time under Controls → Locks → Keys.')),
-    el('div', { class: 'panel', style: 'margin-top:0' },
-      el('h3', { style: 'margin:0;font-size:16px' }, 'Status'),
-      carStatusBox,
-      el('div', { class: 'row', style: 'margin-top:12px' }, stateBtn, forget), stateOut));
+        el('li', { class: 'yes' }, icon('check'), 'Closes the charge port', tip('Nothing moves with a cable plugged in.')),
+        el('li', { class: 'yes' }, icon('check'), 'Re-sets the same charge current')),
+      el('p', { class: 'muted', style: 'margin:12px 0 0;font-size:13px' }, 'Turn on PIN to Drive. ',
+        tip('The key has the Driver role, needed to keep the car awake. Someone with the Pi could drive off. Controls → Safety.')));
+  const statusPanel = el('div', { class: 'panel', style: 'margin-top:0' },
+    el('h3', { style: 'margin:0;font-size:16px' }, 'Status'),
+    carStatusBox,
+    el('div', { class: 'row', style: 'margin-top:12px' }, stateBtn, forget), stateOut);
 
-  page('car', 'Car', el('div', { class: 'car-layout' }, steps, side));
+  if (car.paired && !oldKey) {
+    // set up: what's going on first; the steps only to change something
+    page('car', 'Car', el('div', { class: 'car-layout' },
+      el('div', { class: 'side' }, statusPanel,
+        el('details', { class: 'panel fold' }, el('summary', {}, 'Change VIN or pair again'), steps)),
+      el('div', { class: 'side' }, why)));
+    return;
+  }
+  page('car', 'Car', el('div', { class: 'car-layout' }, steps, el('div', { class: 'side' }, why, statusPanel)));
 }
 
 // The Car page's status list and keep-awake button, refreshed with the
@@ -1400,7 +1458,7 @@ function renderCarStatus(car) {
         : k.active ? `Keeping the car awake: ${keepAwakeLine(k)}` : 'Idle'),
       el('dt', {}, 'Last nudge'), el('dd', {}, k.last_wake ? `${ago(new Date(k.last_wake))}${k.nudge ? `: ${k.nudge}` : ''}` : '—'),
       k.last_error ? [el('dt', {}, 'Last error'), el('dd', {}, k.last_error)] : null),
-    holdBtn ? el('div', { class: 'row', style: 'margin-top:12px' }, holdBtn) : null);
+    holdBtn ? el('div', { class: 'row', style: 'margin-top:12px' }, holdBtn) : ''); // replaceChildren writes null as "null"
 }
 
 // ---------- encrypted drive ----------
@@ -1439,12 +1497,11 @@ function showLockedDrive() {
   page('locked', 'Drive locked', el('div', { class: 'setup-page' },
     el('div', { class: 'panel' },
       el('h2', { style: 'margin-top:0' }, 'The drive is locked'),
-      el('p', {}, 'The footage is encrypted. Glovebox opens it, and gives the car its drive, once it has seen your car over Bluetooth. ',
-        'Until then the car can\'t record.'),
+      el('p', {}, 'Waiting for the car over Bluetooth. ', tip('Until it\'s open, the car can\'t record.')),
       box),
     el('div', { class: 'panel' },
       el('h3', { style: 'margin-top:0' }, 'Unlock with your key'),
-      el('p', { class: 'muted' }, 'Your key goes to the Pi over this connection to open the drive, and isn\'t kept.'),
+      el('p', { class: 'muted' }, 'Used once, not stored.'),
       k.node, el('div', { class: 'row', style: 'margin-top:12px' }, unlock), out)));
   lockedBox = box;
   renderLocked();
@@ -1499,10 +1556,10 @@ function mountEncryption(box) {
         if (!error) { pair = null; mode = ''; replacing = false; render(); }
       });
       parts.push(
-        el('p', {}, 'Your key was made in this browser; only its public half goes to Glovebox. ',
-          'Keep the file somewhere safe off the Pi, such as a password manager: if the Pi dies, it\'s the only way to open the footage.'),
+        el('p', {}, 'Save this file somewhere safe, off the Pi. ',
+          tip('Made in this browser; only the public half goes to Glovebox. If the Pi dies, it\'s the only way to open the footage.')),
         el('div', { class: 'row' }, link),
-        el('label', { class: 'check' }, saved, el('span', {}, 'I\'ve saved my key file somewhere safe')),
+        el('label', { class: 'check' }, saved, el('span', {}, 'I\'ve saved it')),
         el('div', { class: 'row' }, use));
     } else if (mode === 'own') {
       const input = el('input', { type: 'text', placeholder: 'age1…', spellcheck: 'false', autocomplete: 'off' });
@@ -1513,7 +1570,7 @@ function mountEncryption(box) {
         if (!error) { mode = ''; replacing = false; render(); } else save.disabled = false;
       });
       parts.push(el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Your age public key'), input,
-        el('span', { class: 'field-hint' }, 'The "public key" line from age-keygen. The private key stays with you.')),
+        el('span', { class: 'field-hint' }, 'The public key line from age-keygen.')),
       el('div', { class: 'row', style: 'margin-top:10px' }, save));
     } else {
       const make = el('button', { class: 'btn btn-primary', type: 'button' }, 'Create a key');
@@ -1548,7 +1605,7 @@ function mountEncryption(box) {
     const word = el('input', { type: 'text', placeholder: 'ERASE', autocomplete: 'off' });
     const go = el('button', { class: 'btn btn-primary', type: 'button', disabled: !(r.key && r.car && r.archived) }, 'Encrypt the drive');
     go.addEventListener('click', async () => {
-      if (!confirm('Erase the car\'s drive and everything Glovebox keeps on the card, and start again encrypted?')) return;
+      if (!confirm('Erase everything on the card and start again encrypted?')) return;
       go.disabled = true;
       await load('POST', '/api/encryption/encrypt', { confirm: word.value.trim() });
       if (!error) waitForRestart();
@@ -1557,18 +1614,17 @@ function mountEncryption(box) {
     return [
       el('h4', {}, 'Encrypt the drive'),
       el('div', { class: 'check-steps' },
-        item(r.key, 'Your key is set'),
-        item(r.car, 'The car is paired (Car page)'),
-        item(r.archived, 'Everything is backed up to the NAS')),
-      el('p', {}, el('b', {}, 'This erases the car\'s drive'), ', recent clips included, and everything else Glovebox keeps on the card. ',
-        'The car records again a minute or two later, onto the encrypted drive.'),
+        item(r.key, 'Key set'),
+        item(r.car, 'Car paired'),
+        item(r.archived, 'Backed up')),
+      el('p', {}, el('b', {}, 'Erases the card.'), el('span', { class: 'muted' }, ' The car records again a minute later.')),
       el('label', { class: 'field', style: 'max-width:220px' }, el('span', { class: 'field-label' }, 'Type ERASE to confirm'), word),
       el('div', { class: 'row', style: 'margin-top:10px' }, go),
     ];
   }
 
   async function waitForRestart() {
-    box.replaceChildren(el('h3', {}, 'Drive encryption'), updateResult('busy', 'Glovebox is restarting to encrypt the drive. This takes a minute or two…'));
+    box.replaceChildren(el('h3', {}, 'Drive encryption'), updateResult('busy', 'Restarting to encrypt…'));
     const until = Date.now() + 5 * 60 * 1000;
     while (box.isConnected && Date.now() < until) {
       await new Promise((res) => setTimeout(res, 4000));
@@ -1577,16 +1633,14 @@ function mountEncryption(box) {
         if (now.encrypted || now.encrypt_error) { st = now; error = ''; render(); refreshStatus(); return; }
       } catch { /* restarting */ }
     }
-    if (box.isConnected) { error = 'Glovebox hasn\'t come back. Reload the page in a minute.'; render(); }
+    if (box.isConnected) { error = 'Not back yet. Reload in a minute.'; render(); }
   }
 
   function render() {
     const parts = [el('h3', {}, 'Drive encryption')];
     if (!st.encrypted) {
-      parts.push(el('p', { class: 'muted' },
-        'Encrypt the footage on the Pi with a key that\'s yours. Clips still play here and in the car, but the card can\'t be read on its own. ',
-        'The drive opens once Glovebox has seen your car over Bluetooth, and stays open until the car cuts the power. ',
-        'Turn off Encrypt Dashcam Recordings in the car (Controls → Safety) so it records plain clips for Glovebox to encrypt.'));
+      parts.push(el('p', { class: 'muted' }, 'Encrypt the card with your own key. ',
+        tip('Clips still play here and in the car. The drive opens when Glovebox sees your car over Bluetooth. Turn off the car\'s own Encrypt Dashcam Recordings (Controls → Safety).')));
       if (st.encrypt_requested) parts.push(updateResult('busy', 'Encrypting at the next restart…'));
       if (st.encrypt_error) parts.push(updateResult('bad', `Encrypting failed: ${st.encrypt_error}`));
       parts.push(el('h4', {}, 'Your key'), ...keySection(true));
@@ -1597,14 +1651,215 @@ function mountEncryption(box) {
         el('dt', {}, 'Drive'), el('dd', {}, unlocked
           ? `Encrypted, unlocked ${UNLOCKED_BY[st.unlocked_by] || ''}${st.unlocked_at ? ` (${ago(new Date(st.unlocked_at))})` : ''}`
           : 'Encrypted, locked: waiting for the car'),
-        el('dt', {}, 'Car check'), el('dd', {}, st.car_check === 'audit'
-          ? 'Audit: checked and logged, but the drive opens either way' : 'On: the drive opens only once the car has been seen'),
+        el('dt', {}, 'Car check'), el('dd', {}, st.car_check === 'audit' ? 'Audit only' : 'On',
+          tip(st.car_check === 'audit' ? 'Checked and logged; the drive opens either way.' : 'The drive opens only once the car is seen.')),
         st.check_seconds ? [el('dt', {}, 'Last check took'), el('dd', {}, `${st.check_seconds.toFixed(1)} s`)] : null),
       el('h4', {}, 'Your key'), ...keySection(unlocked));
-      if (!unlocked) parts.push(el('p', { class: 'muted' }, 'The key can be changed once the drive is unlocked.'));
+      if (!unlocked) parts.push(el('p', { class: 'muted' }, 'Unlock to change the key.'));
     }
     if (error) parts.push(updateResult('bad', error));
     box.replaceChildren(...parts);
+  }
+
+  load();
+}
+
+// ---------- storage ----------
+
+const fmtHours = (h) => (h < 1 ? `${Math.max(0, Math.round(h * 60))} min` : `${h.toFixed(1)} h`);
+
+// tip is a small "?" that shows a short explanation when tapped.
+function tip(text) {
+  return el('details', { class: 'tip' }, el('summary', { 'aria-label': 'More info' }, '?'), el('div', { class: 'tip-body' }, text));
+}
+
+// pill is a short status tag.
+function pill(state, text) {
+  return el('span', { class: `pill pill-${state}` }, text);
+}
+
+// usageBar draws a storage bar like a phone's: one colored segment per use.
+function usageBar(parts, total, thin) {
+  const shown = parts.filter((p) => p.bytes > 0);
+  return el('div', { class: `usage-bar${thin ? ' thin' : ''}`, role: 'img',
+    'aria-label': shown.map((p) => `${p.label} ${gb(p.bytes)}`).join(', ') },
+  shown.map((p) => el('span', { class: `usage-seg u-${p.key}`, title: `${p.label}: ${gb(p.bytes)}`,
+    style: `width:${(100 * p.bytes / total).toFixed(2)}%` })));
+}
+
+// usageRows lists the parts under the bar: dot, name, size, and a tip.
+function usageRows(parts) {
+  return el('ul', { class: 'rows' }, parts.filter((p) => p.bytes > 0 || p.always).map((p) => el('li', {},
+    el('span', { class: `usage-dot u-${p.key}` }),
+    el('span', { class: 'row-name' }, p.label, p.tip ? tip(p.tip) : null, p.sub ? el('small', {}, p.sub) : null),
+    el('span', { class: 'row-value' }, p.value || gb(p.bytes)))));
+}
+
+// mountStorage is Settings → Storage: how the card is used, and how much
+// driving the Pi keeps until it's backed up. That's the size of the car's
+// drive: the car records over all of its drive, so only the rest of the
+// card can keep drives.
+function mountStorage(box) {
+  let st = null;
+  let error = '';
+  let hours = null; // the slider, while the user moves it
+  let confirming = false;
+
+  async function load(method, path, body) {
+    try {
+      st = method ? await send(method, path, body) : await api('/api/storage');
+      error = '';
+    } catch (e) {
+      error = e.message;
+      if (!st) {
+        box.replaceChildren(el('h3', {}, 'Storage'), el('p', { class: 'muted' }, `Not available: ${error}`));
+        return;
+      }
+    }
+    if (box.isConnected) render();
+  }
+
+  const extrasBytes = () => st.extras.reduce((n, x) => n + x.size, 0);
+  const room = (car) => Math.max(0, st.total - car - extrasBytes() - st.min_free);
+  const hoursFor = (car) => room(car) / st.rate;
+  const carFor = (h) => {
+    const car = Math.floor((st.total - extrasBytes() - st.min_free - h * st.rate) / 2 ** 30) * 2 ** 30;
+    return Math.min(st.max_car_size, Math.max(st.min_car_size, car));
+  };
+  const extraName = (x) => `${x.label[0]}${x.label.slice(1).toLowerCase()}`;
+
+  function parts() {
+    const c = st.car;
+    const k = st.kept;
+    const out = [];
+    if (c.known) {
+      out.push(
+        { key: 'recent', label: 'Car recordings', bytes: c.recent + c.other, tip: 'The car\'s own last hour.' },
+        { key: 'sentry', label: 'Sentry', bytes: c.sentry },
+        { key: 'saved', label: 'Saved', bytes: c.saved },
+        { key: 'carfree', label: 'Car free space', bytes: Math.max(0, c.size - c.recent - c.other - c.sentry - c.saved),
+          tip: 'Empty to the car, but it records over all of it, so Glovebox can\'t use it.' });
+    } else {
+      out.push({ key: 'recent', label: 'Car drive', bytes: c.size });
+    }
+    for (const x of st.extras) out.push({ key: 'extras', label: extraName(x), bytes: x.size });
+    // kept clips only cost space once the car has recorded over its own copy
+    const onCard = Math.min(k.bytes, st.outside);
+    const pending = k.minutes - k.archived_minutes;
+    out.push({ key: 'kept', label: 'Kept drives', bytes: onCard, always: true,
+      value: k.minutes ? fmtHours(k.minutes / 60) : 'None',
+      sub: pending ? `${fmtHours(pending / 60)} not backed up` : (k.minutes ? 'All backed up' : ''),
+      tip: 'Driving kept after the car moves on, until it\'s backed up. Parked time is skipped.' });
+    const taken = out.reduce((n, p) => n + p.bytes, 0);
+    out.push({ key: 'work', label: 'System', bytes: Math.max(0, st.total - taken - st.free), tip: 'Snapshot and working space.' },
+      { key: 'free', label: 'Free', bytes: st.free, always: true });
+    return out;
+  }
+
+  function plan(car) {
+    const c = st.car;
+    const events = c.sentry + c.saved;
+    return [
+      { key: 'recent', label: 'Car recordings', bytes: Math.min(st.rate, car) },
+      { key: 'sentry', label: 'Sentry and saved', bytes: Math.min(events, Math.max(0, car - st.rate)) },
+      { key: 'carfree', label: 'Car free space', bytes: Math.max(0, car - st.rate - events) },
+      ...st.extras.map((x) => ({ key: 'extras', label: extraName(x), bytes: x.size })),
+      { key: 'kept', label: 'Kept drives', bytes: room(car) },
+      { key: 'work', label: 'System', bytes: st.min_free },
+    ];
+  }
+
+  function keepSection() {
+    if (st.recreate) {
+      const cancel = el('button', { class: 'btn', type: 'button' }, 'Cancel');
+      cancel.addEventListener('click', () => load('DELETE', '/api/storage/resize'));
+      return [el('div', { class: 'row-line' }, pill('busy', `Car drive → ${gb(st.recreate)} on restart`), cancel)];
+    }
+    if (st.max_car_size < st.min_car_size) return [el('p', { class: 'muted' }, 'Card too small to keep extra driving.')];
+    const lo = hoursFor(st.max_car_size);
+    const hi = hoursFor(st.min_car_size);
+    if (hours === null) hours = Math.min(hi, Math.max(lo, hoursFor(st.car.size)));
+    // The slider stays put while it moves (replacing it would end a touch
+    // drag); only what depends on it is redrawn.
+    const slider = el('input', { type: 'range', min: lo.toFixed(2), max: hi.toFixed(2), step: '0.05', value: String(hours),
+      'aria-label': 'Hours of driving to keep' });
+    const value = el('span', { class: 'keep-value' });
+    const preview = el('div');
+    const note = el('div', { class: 'muted keep-note' });
+    const actions = el('div');
+    const update = () => {
+      const car = carFor(hours);
+      value.textContent = fmtHours(hoursFor(car));
+      preview.replaceChildren(usageBar(plan(car), st.total, true));
+      const changed = Math.abs(car - st.car.size) >= 2 ** 30;
+      note.textContent = `Car drive ${gb(car)}${changed ? ` · now ${gb(st.car.size)}` : ' · current'}`;
+      actions.replaceChildren(...(changed ? applyControls(car) : []));
+    };
+    slider.addEventListener('input', () => {
+      hours = Number(slider.value);
+      confirming = false;
+      update();
+    });
+    update();
+    return [
+      el('div', { class: 'keep-head' },
+        el('h4', {}, 'Keep driving', tip(`More kept driving makes the car drive smaller. The car still keeps its last hour and its events. Your car records about ${gb(st.rate)} an hour.`)),
+        value),
+      slider,
+      el('div', { class: 'keep-scale muted' }, el('span', {}, fmtHours(lo)), el('span', {}, fmtHours(hi))),
+      preview, note, actions,
+    ];
+  }
+
+  function applyControls(car) {
+    const ready = st.archived || !st.backups;
+    if (!confirming) {
+      const apply = el('button', { class: 'btn btn-primary', type: 'button', disabled: !ready }, 'Apply');
+      apply.addEventListener('click', () => { confirming = true; render(); });
+      return [el('div', { class: 'row-line' }, apply, ready ? null : pill('warn', 'Waiting for backup'))];
+    }
+    const word = el('input', { type: 'text', placeholder: 'Type ERASE', autocomplete: 'off', 'aria-label': 'Type ERASE to confirm' });
+    const go = el('button', { class: 'btn btn-danger', type: 'button', disabled: true }, 'Erase and resize');
+    word.addEventListener('input', () => { go.disabled = word.value.trim() !== 'ERASE'; });
+    const cancel = el('button', { class: 'btn', type: 'button' }, 'Cancel');
+    cancel.addEventListener('click', () => { confirming = false; render(); });
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      await load('POST', '/api/storage/resize', { size: car, confirm: word.value.trim() });
+      if (!error) waitForRestart(car);
+    });
+    return [el('div', { class: 'confirm-box' },
+      el('div', {}, el('b', {}, 'Erases the car drive.'), el('span', { class: 'muted' }, st.backups ? ' Kept drives stay.' : ' Nothing is backed up.')),
+      el('div', { class: 'row-line' }, word, go, cancel))];
+  }
+
+  async function waitForRestart(car) {
+    box.replaceChildren(el('h3', {}, 'Storage'), pill('busy', 'Restarting with the new car drive…'));
+    const until = Date.now() + 5 * 60 * 1000;
+    while (box.isConnected && Date.now() < until) {
+      await new Promise((res) => setTimeout(res, 4000));
+      try {
+        const now = await api('/api/storage');
+        if (!now.recreate && Math.abs(now.car.size - car) < 2 ** 30) {
+          st = now; hours = null; confirming = false; error = '';
+          render(); refreshStatus();
+          return;
+        }
+      } catch { /* restarting */ }
+    }
+    if (box.isConnected) { error = 'Not back yet. Reload in a minute.'; render(); }
+  }
+
+  function render() {
+    const p = parts();
+    box.replaceChildren(
+      el('div', { class: 'storage-head' }, el('h3', {}, 'Storage'),
+        el('span', { class: 'muted' }, el('b', {}, gb(st.total - st.free)), ` of ${gb(st.total)} used`)),
+      usageBar(p, st.total),
+      usageRows(p),
+      el('hr', { class: 'sep' }),
+      ...keepSection(),
+      error ? pill('bad', error) : '');
   }
 
   load();
@@ -1616,6 +1871,7 @@ function showSetup(initialTab = 'backups') {
   const sections = [
     ['backups', 'Backups', 'Choose where clips go and test the connection.'],
     ['drives', 'Extra drives', 'Make room for music, light shows, and Boombox sounds.'],
+    ['storage', 'Storage', 'See what uses the card and choose how much driving to keep.'],
     ['security', 'Security', 'Manage drive encryption and your recovery key.'],
     ['updates', 'Updates', 'Review new releases and choose when to install.'],
   ];
@@ -1654,10 +1910,8 @@ function showSetup(initialTab = 'backups') {
     tabs.append(button);
   });
   page('settings', 'Settings', el('div', { class: 'setup-page settings-page' },
-    el('div', { class: 'welcome' }, el('div', {}, el('h2', {}, 'Make it yours.'),
-      el('p', {}, 'Backups, storage, security, and software — each in its own place.')),
-      el('a', { class: 'btn', href: '#/welcome' }, 'Guided setup')),
-    tabs, ...Object.values(panels), save));
+    el('div', { class: 'settings-top' }, tabs, el('a', { class: 'btn', href: '#/welcome' }, 'Guided setup')),
+    ...Object.values(panels), save));
   select(selected);
   window.GloveboxSetup.mount(panels.backups, {
     onSaved: refreshStatus,
@@ -1670,11 +1924,13 @@ function showSetup(initialTab = 'backups') {
     },
   });
   panels.drives.append(loading());
+  const sto = el('div', { class: 'panel update' });
+  panels.storage.append(sto);
+  mountStorage(sto);
   const enc = el('div', { class: 'panel update' });
   const upd = el('div', { class: 'panel update' });
   panels.security.append(enc);
-  panels.updates.append(el('p', { class: 'settings-hint muted' },
-    'Glovebox checks for new releases automatically while this interface is open. Checks are cached for six hours. Installing an update is always your choice.'), upd);
+  panels.updates.append(upd);
   mountEncryption(enc);
   mountUpdate(upd);
 }
@@ -1782,7 +2038,7 @@ function mountUpdate(box) {
       } catch { /* still restarting */ }
     }
     if (alive()) {
-      error = 'Glovebox hasn\'t come back after the update. Give it a minute and reload the page; if it still doesn\'t answer, unplug the Pi and plug it back in.';
+      error = 'Not back yet. Reload in a minute, or unplug the Pi and plug it back in.';
       u = { ...u, state: 'idle' };
       render();
     }
@@ -1799,7 +2055,7 @@ function mountUpdate(box) {
     const head = el('div', { class: 'update-head' },
       el('div', {},
         el('h3', {}, 'Software update'),
-        el('p', { class: 'muted' }, u ? `This is Glovebox ${u.current}${u.release ? '' : ' (a test build)'}.` : 'Checking…')));
+        el('p', { class: 'muted' }, u ? `Version ${u.current}${u.release ? '' : ' (test build)'}` : 'Checking…')));
     const parts = [head];
     if (!u || !u.supported) {
       if (u) parts.push(el('p', { class: 'muted' }, `Glovebox can't update itself here: ${u.why}.`));
@@ -1814,12 +2070,12 @@ function mountUpdate(box) {
 
     if (u.state === 'checking') parts.push(updateResult('busy', 'Asking GitHub for the latest version…'));
     else if (u.state === 'installing') parts.push(updateResult('busy', `${u.step || 'Installing'}…`));
-    else if (u.state === 'restarting') parts.push(updateResult('busy', `Restarting with ${u.latest?.version}. The car's drive stays connected.`));
+    else if (u.state === 'restarting') parts.push(updateResult('busy', `Restarting with ${u.latest?.version}…`));
     else if (u.available && u.latest) {
       const l = u.latest;
       const install = el('button', { class: 'btn btn-primary' }, `Install ${l.version}`);
       install.addEventListener('click', async () => {
-        if (!confirm(`Install Glovebox ${l.version}? Glovebox restarts to finish, which takes about a minute. The car's drive stays connected.`)) return;
+        if (!confirm(`Install ${l.version}? Restarts in about a minute; the car keeps recording.`)) return;
         install.disabled = true;
         await load('/api/update/install', 'POST');
         poll();
@@ -1831,7 +2087,7 @@ function mountUpdate(box) {
         el('div', { class: 'row' }, install,
           l.url ? el('a', { href: l.url, target: '_blank', rel: 'noopener' }, 'Release notes on GitHub') : null)));
     } else if (u.latest && !u.error) {
-      parts.push(updateResult('ok', `Up to date: ${u.latest.version} is the latest version${u.checked ? ` (checked ${ago(new Date(u.checked))})` : ''}.`));
+      parts.push(updateResult('ok', `Up to date${u.checked ? ` · checked ${ago(new Date(u.checked))}` : ''}`));
     }
     const err = error || u.error;
     if (err && !busy) parts.push(updateResult('bad', err));
@@ -1890,3 +2146,25 @@ checkForUpdates();
 setInterval(checkForUpdates, 60 * 60 * 1000);
 window.addEventListener('online', checkForUpdates);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdates(); });
+
+// An open tip closes when anything else is tapped, and when the page scrolls.
+document.addEventListener('click', (e) => {
+  for (const d of document.querySelectorAll('details.tip[open]')) if (!d.contains(e.target)) d.open = false;
+});
+document.addEventListener('scroll', () => {
+  for (const d of document.querySelectorAll('details.tip[open]')) d.open = false;
+}, { capture: true, passive: true });
+
+// An opening tip is placed under its "?", kept inside the screen (above it
+// if there's no room below).
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.classList.contains('tip') || !d.open) return;
+  const body = d.querySelector('.tip-body');
+  const q = d.querySelector('summary').getBoundingClientRect();
+  const w = body.offsetWidth;
+  const h = body.offsetHeight;
+  const margin = 10;
+  body.style.left = `${Math.max(margin, Math.min(q.left + q.width / 2 - w / 2, innerWidth - w - margin))}px`;
+  body.style.top = `${q.bottom + 6 + h > innerHeight - margin ? q.top - 6 - h : q.bottom + 6}px`;
+}, true);

@@ -31,6 +31,8 @@ type Library interface {
 	Event(kind, id string, encrypted bool) (clips.Event, bool)
 	Recent() []clips.Clip
 	Open(snapshot, rel string) (*os.File, error)
+	// Locate finds the current copy of a file whose snapshot has gone.
+	Locate(rel string) (clips.File, bool)
 }
 
 // Snapshotter takes a snapshot and waits for it.
@@ -328,14 +330,14 @@ func (a *Archiver) run(ctx context.Context) (res Result) {
 	events := map[string]bool{}
 	for i, it := range todo {
 		a.setProgress(it.remote, i, len(todo))
-		err := a.upload(ctx, sess, it)
+		size, err := a.upload(ctx, sess, it)
 		if err == nil {
-			a.State.Mark(it.path, it.size)
+			a.State.Mark(it.path, size)
 			if serr := a.State.Save(); serr != nil {
 				a.Log.Error("saving archive state", "err", serr)
 			}
 			res.Uploaded++
-			res.Bytes += it.size
+			res.Bytes += size
 			if !events[it.event] && it.event != "" {
 				events[it.event] = true
 				res.Events = append(res.Events, it.event)
@@ -356,21 +358,30 @@ func (a *Archiver) run(ctx context.Context) (res Result) {
 	return res
 }
 
-func (a *Archiver) upload(ctx context.Context, sess Session, it item) error {
-	// already there in full, e.g. archived before the state was lost
-	if size, ok, err := sess.Size(ctx, it.remote); err != nil {
-		return err
-	} else if ok && size == it.size {
-		return nil
-	}
+// upload copies one file and returns the size it archived. The snapshot the
+// queue found it in may have been released since (to free space, or once
+// its clips were kept in the clip store); then the current copy is used.
+func (a *Archiver) upload(ctx context.Context, sess Session, it item) (int64, error) {
 	f, err := a.Library.Open(it.snapshot, it.path)
+	if errors.Is(err, clips.ErrNotFound) {
+		if cur, ok := a.Library.Locate(it.path); ok && cur.Snapshot != it.snapshot {
+			it.snapshot, it.size = cur.Snapshot, cur.Size
+			f, err = a.Library.Open(it.snapshot, it.path)
+		}
+	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer f.Close()
+	// already there in full, e.g. archived before the state was lost
+	if size, ok, err := sess.Size(ctx, it.remote); err != nil {
+		return 0, err
+	} else if ok && size == it.size {
+		return it.size, nil
+	}
 	tu, ok := sess.(TempUploader)
 	if !ok {
-		return sess.Upload(ctx, it.remote, f, it.size)
+		return it.size, sess.Upload(ctx, it.remote, f, it.size)
 	}
 	// Record the temporary file before writing it: if the power is cut
 	// mid-upload, the next run deletes it.
@@ -383,7 +394,7 @@ func (a *Archiver) upload(ctx context.Context, sess Session, it item) error {
 	if err == nil {
 		a.State.DropPartial(tmp) // renamed into place; saved with the file's Mark
 	}
-	return err
+	return it.size, err
 }
 
 // maxPartialTries is how many runs try to delete a temporary file before
@@ -523,4 +534,20 @@ func (r Result) Summary() string {
 		s += fmt.Sprintf("; %d failed, %d left for next time", r.Failed, r.Pending)
 	}
 	return s
+}
+
+// Outstanding counts the files on the drive that aren't archived yet: what
+// erasing the drive now would lose. Recent clips recorded at home don't
+// count, as they're never archived (unless RecentAtHome).
+func (a *Archiver) Outstanding() (int, error) {
+	if _, err := a.Library.Refresh(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, it := range a.queue() {
+		if !a.State.Done(it.path, it.size) {
+			n++
+		}
+	}
+	return n, nil
 }

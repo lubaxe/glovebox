@@ -693,3 +693,42 @@ func TestLockedPartialIsRetriedThenForgotten(t *testing.T) {
 		t.Errorf("on the target: %v, want only the one given up on", got)
 	}
 }
+
+// A snapshot released mid-run (for space, or once the clip store has its
+// clips) mustn't fail the uploads queued from it: they come from the copy
+// that's still there.
+func TestSnapshotReleasedMidRun(t *testing.T) {
+	files := map[string]int{
+		"TeslaCam/RecentClips/2026-10-19_16-00-00-front.mp4": clipSize,
+		"TeslaCam/RecentClips/2026-10-19_16-01-00-front.mp4": clipSize,
+		"TeslaCam/RecentClips/2026-10-19_16-02-00-front.mp4": clipSize,
+	}
+	snaps := &snapSet{}
+	snaps.add(t, "snap-000001", files)
+	a, target := newArchiver(t, snaps)
+	a.Recent = true
+	target.onUpload = func(string) {
+		target.onUpload = nil
+		snaps.mu.Lock()
+		snaps.snaps = nil
+		snaps.mu.Unlock()
+		snaps.add(t, "store", files)
+	}
+	res := a.run(context.Background())
+	if res.Failed != 0 || res.Uploaded != 3 {
+		t.Errorf("uploaded %d, failed %d; want 3 and 0", res.Uploaded, res.Failed)
+	}
+}
+
+func TestOutstanding(t *testing.T) {
+	snaps := &snapSet{}
+	snaps.add(t, "snap-000001", standardDrive)
+	a, _ := newArchiver(t, snaps)
+	if n, err := a.Outstanding(); err != nil || n != 6 { // Sentry and Saved; Recent is off
+		t.Fatalf("before: %d, %v", n, err)
+	}
+	a.run(context.Background())
+	if n, err := a.Outstanding(); err != nil || n != 0 {
+		t.Errorf("after: %d, %v", n, err)
+	}
+}

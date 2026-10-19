@@ -50,20 +50,28 @@
     smb: 'A share, or a folder in one: e.g. Music or TeslaCam/Music.',
     nfs: 'An export path on the same server, e.g. /mnt/user/Music.',
     rsync: 'A folder on the same server, e.g. /volume1/Music.',
-    rclone: 'A folder on the same remote, e.g. Music, or another remote as name:folder.',
+    rclone: 'e.g. Music, or remote:folder.',
   };
 
   const DRIVES = [
     { id: 'music', name: 'Music', sizes: ['4G', '8G', '16G', '32G', '64G'], suggest: '8G', source: 'Music',
-      text: 'Songs the car plays from USB. Glovebox copies the folder over whenever the car gets home.' },
+      text: 'Songs for the car, synced at home.' },
     { id: 'lightshow', name: 'Light Show', sizes: ['512M', '1G', '2G'], suggest: '1G', source: 'LightShow',
-      text: 'Custom light shows: an .fseq file and an .mp3 or .wav with the same name. They go in the drive\'s LightShow folder.' },
+      text: 'An .fseq plus a matching .mp3 or .wav.' },
     { id: 'boombox', name: 'Boombox', sizes: ['128M', '256M', '512M'], suggest: '256M', source: 'Boombox',
-      text: 'Sounds for Boombox, as .mp3 or .wav. They go in the drive\'s Boombox folder.' },
+      text: 'Boombox sounds, .mp3 or .wav.' },
   ];
 
+  // tip is a small "?" that shows a short explanation when tapped.
+  function tip(text) {
+    return h('details', { class: 'tip' }, h('summary', { 'aria-label': 'More info' }, '?'), h('div', { class: 'tip-body' }, text));
+  }
+
+  // A short hint goes under the field; a longer one behind a "?".
   function field(label, input, hint) {
-    return h('label', { class: 'field' }, h('span', { class: 'field-label' }, label), input, hint ? h('span', { class: 'field-hint' }, hint) : null);
+    const long = hint && String(hint).length > 45;
+    return h('label', { class: 'field' }, h('span', { class: 'field-label' }, label, long ? tip(hint) : null), input,
+      hint && !long ? h('span', { class: 'field-hint' }, hint) : null);
   }
 
   // text binds a text input to obj[key].
@@ -134,8 +142,8 @@
 
     function checkField(required) {
       const hint = required
-        ? `An address that only answers at home: while it does, the car is home and Glovebox backs up. Your router is a good choice${s.gateway ? `, e.g. ${s.gateway}:80` : ' (e.g. 192.168.1.1:80)'}.`
-        : 'Optional. By default the server itself tells Glovebox the car is home. host:port';
+        ? `Something that only answers at home, like your router${s.gateway ? ` (${s.gateway}:80)` : ''}. When it answers, the car is home.`
+        : 'Optional, host:port';
       return field(required ? 'Home check address' : 'Home check address (advanced)',
         text(a, 'check_address', { placeholder: s.gateway ? `${s.gateway}:80` : '192.168.1.1:80' }), hint);
     }
@@ -220,9 +228,8 @@
           return `Saved. Remotes: ${m.remotes.join(', ')}.`;
         }));
         const confBlock = h('div', { class: 'conf' },
-          h('p', {}, 'Set up the remote on a computer with ', h('code', {}, 'rclone config'),
-            ' (it signs in to cloud services in a browser), then paste the contents of its rclone.conf (',
-            h('code', {}, 'rclone config file'), ' shows where it is).'),
+          h('p', {}, 'Paste your rclone.conf ',
+            tip('Make the remote on a computer with "rclone config". "rclone config file" shows where the file is.')),
           conf, h('div', { class: 'row' }, confBtn), confOut);
         parts.push(
           m.remotes.length ? h('details', { class: 'advanced' }, h('summary', {}, 'Replace rclone.conf'), confBlock) : confBlock,
@@ -231,8 +238,8 @@
             field('Folder on the remote', h('input', { type: 'text', value: folder, placeholder: 'TeslaCam', oninput: (e) => { folder = e.target.value; sync(); } })),
             checkField(true)));
       }
-      parts.push(check(a, 'recent', 'Also back up all driving footage (Recent clips, about 15-20 GB per hour of driving)'));
-      parts.push(check(a, 'recent_at_home', 'Also back up Recent clips recorded while the car is home (for a car parked outside; in a garage it\'s just footage of the garage)'));
+      parts.push(check(a, 'recent', ['Back up drives too ', tip('All driving, about 16 GB an hour.')]));
+      parts.push(check(a, 'recent_at_home', ['Include time at home ', tip('For a car parked outside. In a garage it\'s just the garage.')]));
       parts.push(h('div', { class: 'row', style: 'margin-top:14px' }, testBtn), testOut);
       connBox.replaceChildren(...parts);
       testOut.replaceChildren();
@@ -286,7 +293,7 @@
     let n = 0;
     const next = () => ++n;
     const before = (opts.before || []).map((f) => f(next()));
-    const saveStep = step(0, 'Save', 'Glovebox restarts to use the new settings. The dashcam drive stays connected, unless the extra drives changed: then the car sees all of them reconnect.',
+    const saveStep = step(0, 'Save', 'Glovebox restarts to apply.',
       h('div', { class: 'row' }, saveBtn), saveOut);
     let middle;
     if (opts.fold && a.enabled) {
@@ -303,10 +310,10 @@
       ];
     } else {
       middle = [
-        step(next(), 'Where should clips go?', 'Glovebox copies Sentry and saved clips there whenever the car is home, and nothing leaves your network unless you pick a cloud remote.',
+        step(next(), 'Where should clips go?', 'Copied whenever the car is home.',
           typeBox, check(a, 'enabled', 'Back up when the car is home')),
         step(next(), 'Connect', null, connBox),
-        step(next(), 'Extra drives', 'Besides the dashcam drive, the car can get drives with music, a light show and Boombox sounds. Their files are copied from your server, and updated whenever the car gets home. The dashcam drive keeps the rest of the space.',
+        step(next(), 'Extra drives', 'Music, light shows and Boombox, synced from your server.',
           drivesBox),
       ];
     }
@@ -407,7 +414,7 @@
       const country = h('select', { onchange: (e) => { form.country = e.target.value; } },
         h('option', { value: '' }, 'Unchanged'), COUNTRIES.map(([c, name]) => h('option', { value: c }, name)));
       const join = h('button', { type: 'button', class: 'btn-primary' }, 'Connect');
-      join.addEventListener('click', () => busy(join, out, 'Connecting… On the setup network, your phone may drop off for a moment.', async () => {
+      join.addEventListener('click', () => busy(join, out, 'Connecting… your phone may drop off briefly.', async () => {
         const sent = Date.now();
         let res;
         try {
@@ -421,7 +428,7 @@
               if (st.last_join && new Date(st.last_join.at).getTime() >= sent - 5000) res = st.last_join;
             } catch { /* still reconnecting */ }
           }
-          if (!res) throw new Error('Lost touch with Glovebox. Reconnect to its network and reload this page.');
+          if (!res) throw new Error('Lost connection. Rejoin Glovebox\'s network and reload.');
         }
         if (!res.ok) throw new Error(res.error);
         setTimeout(refresh, 1500);
@@ -431,20 +438,20 @@
         h('div', { class: 'fields' },
           field('Network', h('div', { class: 'row' }, list, h('button', { type: 'button', class: 'btn-quiet', onclick: scan }, 'Scan'))),
           otherField,
-          field('Password', h('input', { type: 'password', autocomplete: 'off', oninput: (e) => { form.password = e.target.value; } }), 'Leave empty for an open network. The Pi Zero 2 W only does 2.4 GHz.'),
-          field('Country', country, 'Sets the Wi-Fi channels allowed where you are.')),
+          field('Password', h('input', { type: 'password', autocomplete: 'off', oninput: (e) => { form.password = e.target.value; } }), 'Empty for an open network. 2.4 GHz only.'),
+          field('Country', country, 'For the allowed Wi-Fi channels.')),
         h('div', { class: 'row' }, join), out];
       if (wifi.connected) {
         // on Wi-Fi already: nothing to do unless it's to change
         return folded(num, 'Wi-Fi', where(wifi), 'Change Wi-Fi', () => {
           scan();
-          return [h('p', {}, 'Joining another network moves Glovebox there. If this device isn\'t on that network too, this page loses touch with Glovebox: open it again from that network.'), ...formNodes()];
+          return [h('p', {}, 'Glovebox moves to that network. ', tip('Open this page again from that network.')), ...formNodes()];
         });
       }
       scan();
       return doneStep(num, false, 'Wi-Fi', wifi.access_point
-        ? `Your home network, so Glovebox can back up when the car is home. Once it's connected, you can carry on here, or switch back to your home Wi-Fi and open http://${wifi.hostname}.local:8080.`
-        : 'Your home network, so Glovebox can back up when the car is home.',
+        ? ['Your home network, for backups. ', tip(`Once connected, carry on here or open http://${wifi.hostname}.local:8080 from home Wi-Fi.`)]
+        : 'Your home network, for backups.',
         wifi.connected ? where(wifi) : null, ...formNodes());
     };
   }
@@ -452,7 +459,7 @@
   function carStep(car) {
     return (num) => {
       if (!car) {
-        return doneStep(num, false, 'Your car', 'Keep-awake is off in the settings, so there\'s nothing to pair.');
+        return doneStep(num, false, 'Your car', 'Keep-awake is off.');
       }
       const out = h('div');
       const vin = h('input', { type: 'text', class: 'vin-input', value: car.vin || '', placeholder: '17 characters', maxlength: 17, autocomplete: 'off', spellcheck: 'false' });
@@ -463,11 +470,11 @@
         return 'Saved.';
       }));
       return doneStep(num, car.paired, 'Your car',
-        car.paired ? 'Paired: Glovebox keeps the car awake while it backs up what it recorded away from home.'
-          : 'A sleeping car cuts the Pi\'s power, so Glovebox pairs with the car over Bluetooth to keep it awake while it backs up. Its key can wake the car but not unlock or drive it.',
+        car.paired ? 'Paired. Keeps the car awake during backups.'
+          : ['Keeps the car awake during backups. ', tip('A sleeping car cuts the Pi\'s power. Glovebox pairs over Bluetooth to wake it.')],
         car.paired ? h('p', {}, h('a', { href: '#/car' }, 'Pair again or forget the car on the Car page')) : [
-          field('VIN', h('div', { class: 'row' }, vin, save), 'In the car under Controls → Software, or in the Tesla app.'), out,
-          h('p', {}, 'Pairing takes a minute in the car with a key card: ', h('a', { href: '#/car' }, 'pair on the Car page'), ', now or later.')]);
+          field('VIN', h('div', { class: 'row' }, vin, save), 'Controls → Software, or the Tesla app.'), out,
+          h('p', {}, h('a', { href: '#/car' }, 'Pair on the Car page'), ' (a minute, in the car).')]);
     };
   }
 
@@ -478,9 +485,9 @@
       btn.addEventListener('click', () => busy(btn, out, 'Finishing…', async () => {
         await request('POST', '/api/setup/finish', {});
         if (onFinish) setTimeout(onFinish, 1200);
-        return 'Done. If you set up over Glovebox\'s own network, it turns off now: switch back to your home Wi-Fi.';
+        return 'Done. Switch back to your home Wi-Fi if you used Glovebox\'s.';
       }));
-      return doneStep(num, false, 'Done', 'You can change all of this later on the Setup and Car pages.', h('div', { class: 'row' }, btn), out);
+      return doneStep(num, false, 'Done', 'Change any of this in Settings.', h('div', { class: 'row' }, btn), out);
     };
   }
 
@@ -502,8 +509,7 @@
     root.replaceChildren(h('div', { class: rerun ? 'welcome' : 'welcome hero' },
       h('div', {},
         h('h2', {}, rerun ? 'Change your setup' : ['Welcome to Glovebox', h('span', { class: 'dot' }, '.')]),
-        h('p', {}, rerun ? 'Everything set up already is folded: open just the parts you want to change, and save.'
-          : 'A few steps, and your Sentry and saved clips back themselves up whenever the car gets home.')),
+        h('p', {}, rerun ? 'Open only what you want to change.' : 'A few steps to automatic backups.')),
       h('div', { class: 'row' }, rerun ? h('a', { class: 'btn btn-quiet', href: '#/settings' }, 'All settings') : null, skip)), box);
     await mount(box, {
       before: wifi ? [wifiStep(wifi, again)] : [],

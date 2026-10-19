@@ -33,7 +33,7 @@ Rules that make this safe:
 1. **The Pi never mounts or writes `cam_disk.bin` while the car is connected.** The car caches the filesystem and assumes it owns the disk; a second writer corrupts it.
 2. **All reading happens on snapshots.** A snapshot is crash-consistent (like pulling the power at that instant), so it gets `fsck -p` before mounting. The live image is never repaired while attached.
 3. **Clips being written at snapshot time may be truncated** in that snapshot; the next snapshot has them complete. Archiving records sizes and uploads a file again once it has grown.
-4. **Snapshots are the history.** The car keeps one hour of RecentClips; old snapshots keep more. Free space is managed by deleting the oldest snapshots, never by touching the live image.
+4. **The clip store is the history.** The car keeps one hour of RecentClips. After each snapshot every new minute of driving is cloned out of the snapshot image on its own (a reflink of its byte range: the car writes each clip contiguously) into `/backingfiles/clips/`, minutes recorded parked are left out, and all but the newest snapshot are released. Free space is managed by deleting kept clips, archived ones first, never by touching the live image.
 5. **Archiving is idempotent and resumable.** Each archived file is recorded (path and size, per target) so a power cut mid-upload just continues next time.
 6. **Extra drives (music, light show, Boombox) are only changed in a copy.** A sync updates a reflink clone of the image and swaps it in, ejecting just that drive, only when something changed.
 
@@ -53,6 +53,8 @@ internal/gadget/     USB mass storage gadget via configfs: drives, eject and loa
 internal/drive/      the car's drives: cam disk, extra drives and their sync, snapshot schedule, cleanup
 internal/snapshot/   reflink snapshots, mount/unmount, retention
 internal/clips/      index of clips and events across snapshots
+internal/store/      the clip store: drives cloned out of snapshots, kept until archived
+internal/exfat/      where files lie in an exFAT image, read without mounting it
 internal/archive/    reachability, upload queue and state, targets (SMB/NFS/rsync/rclone), mirroring folders
 internal/keepawake/  keep the car awake over Bluetooth while archiving (tesla-control)
 internal/mp4fix/     serve Tesla's MP4s so Chromium can play them

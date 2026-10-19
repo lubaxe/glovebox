@@ -16,8 +16,9 @@ listen = ":8080"
 # reflink support at backingfiles; the image creates one at first boot.
 enabled = true
 backingfiles = "/backingfiles"
-# Size of the car's dashcam drive; "0" makes it as large as fits, leaving
-# snapshots.min_free.
+# Size of the car's dashcam drive; "0" makes it half of backingfiles, 32G to
+# 64G: the rest keeps drives until they're backed up. Only used when the drive
+# is created.
 cam_size = "0"
 # Also offer a USB serial console (ttyGS0) on the same cable.
 serial_console = false
@@ -61,11 +62,12 @@ car_check = "enforce"
 device = ""
 
 [snapshots]
-# How often to snapshot the car's drive.
-interval = "58m"
-# Keep at least this much free on backingfiles; the oldest snapshots are
-# deleted to stay above it. When the car overwrites half of it between
-# snapshots, a snapshot is taken early so older ones can go.
+# How often to snapshot the car's drive and keep its new minutes of driving
+# (under an hour: the car keeps only its last hour).
+interval = "15m"
+# Keep at least this much free on backingfiles. When the car overwrites half
+# of it between snapshots, a snapshot is taken early so the older one can go;
+# if that's not enough, kept drives are deleted, backed-up ones first.
 min_free = "4G"
 
 [archive]

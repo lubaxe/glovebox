@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -140,5 +141,16 @@ func TestExtraDrives(t *testing.T) {
 	}
 	if _, _, err := Load(writeConfig(t, "[drive.lightshow]\nsize = \"1M\"\n")); err == nil || !strings.Contains(err.Error(), "drive.lightshow.size") {
 		t.Errorf("tiny drive: err = %v", err)
+	}
+}
+
+// The setup page wrote the old default out; it's read as the new one, and
+// any other interval is kept.
+func TestOldDefaultInterval(t *testing.T) {
+	for in, want := range map[string]time.Duration{"58m0s": 15 * time.Minute, "30m": 30 * time.Minute, "58m30s": 58*time.Minute + 30*time.Second} {
+		cfg, _, err := Load(writeConfig(t, "[snapshots]\ninterval = \""+in+"\"\n"))
+		if err != nil || time.Duration(cfg.Snapshots.Interval) != want {
+			t.Errorf("%s: got %v, %v; want %v", in, time.Duration(cfg.Snapshots.Interval), err, want)
+		}
 	}
 }

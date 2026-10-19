@@ -45,6 +45,8 @@ sudo install -m 644 /tmp/glovebox.service /etc/systemd/system/glovebox.service
 sudo install -d /etc/glovebox
 [ -e /etc/glovebox/glovebox.toml ] || sudo install -m 644 /tmp/glovebox.toml /etc/glovebox/glovebox.toml
 rm -f /tmp/glovebox /tmp/glovebox.service /tmp/glovebox.toml
+# the car can cut the power any moment: get the new files onto the card first
+sync
 sudo systemctl daemon-reload
 sudo systemctl enable -q glovebox
 sudo systemctl restart glovebox

@@ -162,3 +162,44 @@ func TestEncryptedClipsAreFlagged(t *testing.T) {
 		t.Errorf("plain event = %+v", plain)
 	}
 }
+
+// The clip store changes under the same ID; a new Version rescans it.
+func TestChangedVersionRescans(t *testing.T) {
+	s := drive(t, map[string]int{"TeslaCam/RecentClips/2026-10-15_00-44-00-front.mp4": big})
+	s.ID, s.Version = "store", 1
+	x := New()
+	x.Refresh([]Snapshot{s})
+	p := filepath.Join(s.Mount, "TeslaCam", "RecentClips", "2026-10-15_00-45-00-front.mp4")
+	if err := os.WriteFile(p, make([]byte, big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	x.Refresh([]Snapshot{s})
+	if n := len(x.Recent()); n != 1 {
+		t.Fatalf("same version rescanned: %d clips", n)
+	}
+	s.Version = 2
+	x.Refresh([]Snapshot{s})
+	if n := len(x.Recent()); n != 2 {
+		t.Fatalf("new version not rescanned: %d clips", n)
+	}
+	if f, ok := x.Locate("TeslaCam/RecentClips/2026-10-15_00-45-00-front.mp4"); !ok || f.Snapshot != "store" {
+		t.Fatalf("Locate = %+v, %v", f, ok)
+	}
+}
+
+// Parked minutes the clip store left out aren't listed as drives.
+func TestHideRecent(t *testing.T) {
+	s := drive(t, map[string]int{
+		"TeslaCam/RecentClips/2026-10-15_00-44-00-front.mp4": big,
+		"TeslaCam/RecentClips/2026-10-15_00-45-00-front.mp4": big,
+	})
+	s.ID = "snap-000001"
+	x := New()
+	x.HideRecent(func(p string, size int64) bool {
+		return p == "TeslaCam/RecentClips/2026-10-15_00-45-00-front.mp4" && size == big
+	})
+	x.Refresh([]Snapshot{s})
+	if r := x.Recent(); len(r) != 1 || r[0].Start != "2026-10-15T00:44:00" {
+		t.Errorf("recent = %+v", r)
+	}
+}
