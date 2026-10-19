@@ -21,13 +21,13 @@ type fakeSystem struct {
 	devDir  string
 	mu      sync.Mutex
 	nextDev int
-	loops   map[string]string // device -> file
-	mounts  map[string]string // mountpoint -> device
-	failOn  string            // command prefix that should fail
+	loops   map[string]string   // device -> file
+	mounts  map[string][]string // mountpoint -> devices, stacked like the kernel does
+	failOn  string              // command prefix that should fail
 }
 
 func newFakeSystem(t *testing.T) *fakeSystem {
-	return &fakeSystem{t: t, devDir: t.TempDir(), loops: map[string]string{}, mounts: map[string]string{}}
+	return &fakeSystem{t: t, devDir: t.TempDir(), loops: map[string]string{}, mounts: map[string][]string{}}
 }
 
 func (f *fakeSystem) run(cmd string) ([]byte, error) {
@@ -58,9 +58,15 @@ func (f *fakeSystem) run(cmd string) ([]byte, error) {
 	case strings.HasPrefix(cmd, "losetup --detach"):
 		delete(f.loops, last)
 	case strings.HasPrefix(cmd, "mount "):
-		f.mounts[last] = args[len(args)-2]
+		f.mounts[last] = append(f.mounts[last], args[len(args)-2])
 	case strings.HasPrefix(cmd, "umount "):
-		delete(f.mounts, last)
+		if stack := f.mounts[last]; len(stack) > 1 {
+			f.mounts[last] = stack[:len(stack)-1]
+		} else if len(stack) == 1 {
+			delete(f.mounts, last)
+		} else {
+			return nil, &system.CmdError{Cmd: cmd, ExitCode: 32, Output: "not mounted"}
+		}
 	case strings.HasPrefix(cmd, "mountpoint "):
 		if _, ok := f.mounts[last]; !ok {
 			return nil, &system.CmdError{Cmd: cmd, ExitCode: 32}
@@ -200,7 +206,7 @@ func TestRestoreAfterReboot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// reboot: mounts and loop devices are gone
-	fs.mounts = map[string]string{}
+	fs.mounts = map[string][]string{}
 	fs.loops = map[string]string{}
 
 	if err := m.Restore(ctx); err != nil {
@@ -349,5 +355,47 @@ func TestListUsesCurrentMountRoot(t *testing.T) {
 	snaps, err := m.List()
 	if err != nil || len(snaps) != 1 || snaps[0].Mount != filepath.Join(m.MountRoot, s.ID) {
 		t.Errorf("snaps = %+v, %v", snaps, err)
+	}
+}
+
+// Snapshots taken before the rename have the old mount root in meta.json.
+// Restore must check where they're mounted now, or every restart of the
+// service stacks another mount (and loop device) on top of the last.
+func TestRestoreDoesNotStackMounts(t *testing.T) {
+	m, fs := newManager(t)
+	ctx := context.Background()
+	s, err := m.Take(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Mount = "/run/oldname/snapshots/" + s.ID
+	if err := writeMeta(filepath.Join(m.Dir, s.ID), s); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 { // service restarts without a reboot
+		if err := m.Restore(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mnt := filepath.Join(m.MountRoot, s.ID)
+	if len(fs.mounts[mnt]) != 1 || len(fs.loops) != 1 {
+		t.Errorf("mounts=%v loops=%v, want one of each", fs.mounts, fs.loops)
+	}
+}
+
+// Releasing a snapshot that got mounted more than once removes every mount.
+func TestReleaseUnmountsStackedMounts(t *testing.T) {
+	m, fs := newManager(t)
+	ctx := context.Background()
+	s, err := m.Take(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs.mounts[s.Mount] = append(fs.mounts[s.Mount], "/dev/loop9p1", "/dev/loop10p1")
+	if err := m.Release(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.mounts) != 0 || len(fs.loops) != 0 {
+		t.Errorf("mounts=%v loops=%v", fs.mounts, fs.loops)
 	}
 }

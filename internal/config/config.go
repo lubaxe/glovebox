@@ -68,6 +68,22 @@ type DriveConfig struct {
 	Music     ExtraDriveConfig `toml:"music"`
 	LightShow ExtraDriveConfig `toml:"lightshow"`
 	Boombox   ExtraDriveConfig `toml:"boombox"`
+	// Encryption controls the encrypted drive, once the drive has been
+	// encrypted from the web UI (Settings).
+	Encryption EncryptionConfig `toml:"encryption"`
+}
+
+// EncryptionConfig controls when the encrypted backingfiles volume opens.
+// Whether the drive is encrypted isn't a setting: it is if the card has
+// the encrypted partition.
+type EncryptionConfig struct {
+	// CarCheck is "enforce": the drive opens only once the paired car has
+	// been seen over Bluetooth (or with the user's key); or "audit": the car
+	// check runs and is logged, but the drive opens either way.
+	CarCheck string `toml:"car_check"`
+	// Device is the partition or image file holding the encrypted volume;
+	// empty means the partition labelled glovebox-crypt. For testing.
+	Device string `toml:"device"`
 }
 
 // Extras returns the extra drives by name: music, lightshow, boombox.
@@ -141,6 +157,7 @@ func Default() Config {
 			Backingfiles:    "/backingfiles",
 			MaxPowerMA:      200,
 			KeepFreePercent: 25,
+			Encryption:      EncryptionConfig{CarCheck: "enforce"},
 		},
 		Snapshots: SnapshotsConfig{
 			Interval: Duration(58 * time.Minute),
@@ -219,6 +236,12 @@ func (c Config) Validate() error {
 		}
 		if time.Duration(c.Snapshots.Interval) < time.Minute {
 			return fmt.Errorf("snapshots.interval must be at least 1m")
+		}
+		if cc := c.Drive.Encryption.CarCheck; cc != "enforce" && cc != "audit" {
+			return fmt.Errorf("drive.encryption.car_check %q must be enforce or audit", cc)
+		}
+		if d := c.Drive.Encryption.Device; d != "" && !path.IsAbs(d) {
+			return fmt.Errorf("drive.encryption.device %q must be an absolute path", d)
 		}
 		for name, x := range c.Drive.Extras() {
 			if x.Size != 0 && x.Size < 32<<20 {

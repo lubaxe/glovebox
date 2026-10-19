@@ -43,6 +43,7 @@ Rules that make this safe:
 cmd/glovebox/        main: config, logging, starts the modules, HTTP server, shutdown
 internal/config/     TOML config (/etc/glovebox/glovebox.toml), validation, defaults
 internal/provision/  first boot: the backingfiles partition, the boot partition's glovebox.toml
+internal/crypt/      the encrypted backingfiles volume (LUKS2): unlock after the car check, recovery key, encrypting
 internal/wifi/       Wi-Fi through NetworkManager: join, scan, the setup network (ap0)
 internal/setup/      the setup page and wizard: read and save settings, connection test, SSH key, rclone.conf
 internal/sysinfo/    uptime, memory, disk, temperature, Wi-Fi (from /proc and /sys)
@@ -64,7 +65,7 @@ Everything that touches the system (`mount`, `losetup`, configfs, `fsck`, `nmcli
 
 ## Done and next
 
-Done: the drive and snapshots, the clip index and web UI, archiving to SMB, NFS, rsync and rclone, keep-awake, the minimal image, extra drives, the setup page, the setup network and the first-run wizard.
+Done: the drive and snapshots, the clip index and web UI, archiving to SMB, NFS, rsync and rclone, keep-awake, the minimal image, extra drives, the setup page, the setup network, the first-run wizard and drive encryption (key file on the Pi; unlocked by the car check).
 
 Next: notifications when a backup finishes, and a read-only root filesystem for more resilience to power cuts.
 

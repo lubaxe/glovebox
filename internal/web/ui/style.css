@@ -772,3 +772,108 @@ input, select { font-size: 14px; }
 /* Event labels stay sharp above generated previews and real footage. */
 .badge { backdrop-filter: none; font-size: 11px; }
 
+
+/* Settings keep each group mounted so switching tabs preserves unsaved edits. */
+[hidden] { display: none !important; }
+.settings-tabs { display: flex; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 22px; }
+.settings-tabs [role=tab] { flex: 1; border: 0; border-radius: 8px; background: transparent; color: var(--muted); padding: 13px 16px; font-size: 14px; white-space: nowrap; }
+.settings-tabs [aria-selected=true] { background: var(--selected); color: var(--on-selected); }
+.settings-tabs [role=tab]:hover { color: var(--text); }
+.settings-page .step { display: block; }
+.settings-page .step-num { display: none; }
+.settings-panel .step + .step { margin-top: 20px; }
+.settings-panel:focus-visible { outline: 2px solid var(--focus); outline-offset: 6px; border-radius: 10px; }
+.settings-save { margin-top: 22px; }
+.settings-save .step { border-color: var(--border); }
+.settings-hint { margin-bottom: 18px; font-size: 14px; line-height: 1.7; }
+.update-notice { margin: 22px 34px 0; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--selected-soft); font-size: 14px; }
+.update-notice strong { display: block; color: var(--text); margin-bottom: 4px; }
+.update-notice span { color: var(--muted); }
+.update-notice .btn { flex-shrink: 0; }
+@media(max-width: 860px) { .update-notice { margin: 18px 18px 0; align-items: flex-start; flex-direction: column; } .settings-tabs { gap: 3px; padding: 4px; } .settings-tabs [role=tab] { font-size: 12px; padding: 12px 7px; } }
+
+/* A notice belongs to the scrolling content, never the mobile navigation shell. */
+.update-dismiss { min-width: 44px; min-height: 44px; padding: 0; border-color: transparent; background: transparent; color: var(--muted); font-size: 24px; line-height: 1; flex-shrink: 0; }
+.update-dismiss:hover { color: var(--text); background: var(--surface); }
+@media(max-width: 860px) {
+  .app { display: block; min-height: 0; height: 100vh; height: 100dvh; overflow: hidden; }
+  .content { height: 100%; width: 100%; overflow-y: auto; overscroll-behavior-y: contain; padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .sidebar { position: fixed; inset: auto 0 0; width: 100%; z-index: 30; flex-shrink: 0; }
+  .update-notice { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 2px 8px; padding: 10px 12px; margin: 12px 18px 0; align-items: center; }
+  .update-notice > div { grid-column: 1; grid-row: 1; min-width: 0; }
+  .update-notice strong { font-size: 13px; margin: 0; overflow-wrap: anywhere; }
+  .update-notice span { display: none; }
+  .update-notice .update-review { grid-column: 1; grid-row: 2; justify-self: start; background: transparent; border: 0; padding: 2px 0; min-height: 32px; font-size: 12px; }
+  .update-notice .update-dismiss { grid-column: 2; grid-row: 1 / 3; align-self: start; }
+}
+/* Immersive player: the close control restores the normal application shell. */
+.viewer-active .app { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+.viewer-active .sidebar { display: none; }
+.content.viewer-open { margin-left: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+.viewer-open > .topbar, .viewer-open > .update-notice { display: none !important; }
+.viewer-open > main { height: 100%; max-width: none; padding: 0; }
+.cinema-viewer { height: 100%; display: flex; flex-direction: column; background: #06080b; color: #fff; }
+.cinema-viewer:fullscreen { width: 100vw; height: 100vh; height: 100dvh; }
+.viewer-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+.cinema-viewer .cams { height: 100%; display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr; gap: 0; }
+.cinema-viewer .cams.viewer-grid { grid-template-columns: repeat(var(--camera-columns,3),minmax(0,1fr)); grid-template-rows: repeat(var(--camera-rows,2),minmax(0,1fr)); gap: 3px; }
+.cinema-viewer .cam { min-height: 0; min-width: 0; border-radius: 0; cursor: pointer; }
+.cinema-viewer .cams:not(.viewer-grid) .cam:not(.main) { display: none; }
+.cinema-viewer .cam video { width: 100%; height: 100%; aspect-ratio: auto; object-fit: contain; }
+.cinema-viewer .cam .label { display: none; }
+.cinema-viewer .viewer-grid .cam .label { display: block; }
+.viewer-time { position: absolute; left: 12px; top: 12px; background: #131820c9; padding: 5px 8px; border-radius: 5px; font-size: 12px; font-weight: 650; color: #fff; }
+.viewer-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 5px; z-index: 8; }
+.viewer-actions .icon-btn { background: #131820c9; border: 0; color: #fff; border-radius: 50%; width: 40px; height: 40px; }
+.viewer-actions a[aria-disabled=true] { opacity: .35; pointer-events: none; }
+.viewer-hud { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 250px; padding: 10px 12px; border-radius: 10px; background: #202832d9; backdrop-filter: blur(12px); display: grid; grid-template-columns: 40px 1fr 65px; gap: 4px; text-align: center; box-shadow: 0 5px 20px #0003; }
+.hud-gear { font-size: 17px; font-weight: 750; background: #ffffff24; border-radius: 50%; width: 28px; height: 28px; align-self: start; }
+.hud-speed { display: flex; flex-direction: column; align-items: center; }
+.hud-speed strong { font-size: 36px; line-height: 1; letter-spacing: -.05em; }
+.hud-speed button { min-height: 24px; padding: 0 4px; border: 0; background: transparent; font-size: 12px; color: #e5eaf2; border-radius: 3px; }
+.hud-steering { display: flex; align-items: center; flex-direction: column; gap: 3px; color: #d3dbe6; }
+.hud-steering svg { width: 25px; height: 25px; transition: none; }
+.hud-steering span { font-size: 10px; font-weight: 700; }
+.hud-steering.assisted { color: #75b8ff; }
+.hud-signals { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: #ffffff4d; }
+.hud-signals > span { display: inline-flex; align-items: center; justify-content: center; min-width: 25px; min-height: 26px; }
+.hud-signals #hud-brake { font-size: 9px; border: 1px solid #ffffff40; border-radius: 16px; padding-inline: 7px; }
+.hud-signals #hud-brake.active { background: #ec594d; border-color: #ec594d; color: #fff; }
+.hud-signals #hud-left.active, .hud-signals #hud-right.active { color: #65e8a1; }
+.hud-signals #hud-throttle { padding-inline: 7px; border-radius: 5px; color: #f2f5fa; background: linear-gradient(to top,#75b8ff66 var(--pedal,0%),#ffffff14 var(--pedal,0%)); }
+.hud-status { grid-column: 1 / -1; font-size: 10px; color: #d0d8e3; }
+.hud-status:empty { display: none; }
+.viewer-hud.unavailable { opacity: .8; }
+.cinema-viewer .controls { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); width: calc(100% - 24px); max-width: 920px; margin: 0; border: 1px solid #ffffff26; background: #141b25d9; color: #fff; border-radius: 10px; z-index: 4; }
+.cinema-viewer .controls .icon-btn, .cinema-viewer .controls select { background: #ffffff14; color: #fff; border-color: #ffffff26; }
+.cinema-viewer .controls .play-btn { background: #d7e6ff; color: #15243d; border-color: transparent; }
+.cinema-viewer .controls select option { color: #182235; background: #fff; }
+.viewer-rail { display: flex; flex: 0 0 108px; gap: 8px; padding: 7px 8px calc(7px + env(safe-area-inset-bottom)); overflow-x: auto; background: #080b10; }
+.camera-choice { position: relative; flex: 1 0 128px; max-width: 220px; height: 90px; border: 2px solid transparent; border-radius: 8px; overflow: hidden; padding: 0; background: #171c24; }
+.camera-choice canvas { width: 100%; height: 100%; display: block; object-fit: cover; opacity: .7; }
+.camera-choice span { position: absolute; inset: auto 0 0; padding: 14px 7px 5px; text-align: left; color: #fff; font-size: 12px; font-weight: 700; background: linear-gradient(transparent,#000c); }
+.camera-choice[aria-pressed=true] { border-color: #e4edff; }
+.camera-choice[aria-pressed=true] canvas { opacity: 1; }
+.viewer-details { position: absolute; top: 58px; right: 12px; z-index: 7; width: min(430px,calc(100% - 24px)); max-height: calc(100% - 155px); overflow-y: auto; padding: 20px; border: 1px solid #ffffff30; border-radius: 12px; background: #151b25f5; color: #fff; }
+.viewer-details .muted, .viewer-details .kv dt { color: #aab7c9; }
+.viewer-details h3 { margin: 18px 0 10px; font-size: 14px; }
+.viewer-details .kv { font-size: 12px; grid-template-columns: 1fr 1.2fr; }
+.viewer-details .kv dd { overflow-wrap: anywhere; }
+.viewer-details .downloads { background: #1d2633; border-color: #ffffff26; }
+.viewer-details .file-chips a, .viewer-details .strip button { background: #1d2633; color: #e7edf7; border-color: #ffffff26; }
+@media(max-width: 860px) {
+ .viewer-time { font-size: 10px; left: 8px; top: 12px; max-width: calc(100% - 175px); }
+ .viewer-actions { gap: 2px; right: 5px; top: 7px; }
+ .viewer-actions .icon-btn { width: 38px; height: 38px; }
+ .viewer-hud { top: 60px; width: 220px; padding: 8px 10px; }
+ .hud-speed strong { font-size: 30px; }
+ .viewer-rail { flex-basis: 90px; gap: 6px; padding: 5px 6px calc(5px + env(safe-area-inset-bottom)); }
+ .camera-choice { flex-basis: 104px; height: 72px; }
+ .cinema-viewer .controls { padding: 7px; gap: 7px; bottom: 8px; }
+ .cinema-viewer .controls .icon-btn { width: 32px; height: 36px; }
+ .cinema-viewer .clock { min-width: 78px; font-size: 11px; }
+ .cinema-viewer .controls select { min-height: 36px; padding: 3px 5px; font-size: 12px; }
+ .cinema-viewer .cams.viewer-grid { grid-template-columns: repeat(var(--camera-mobile-columns,2),minmax(0,1fr)); grid-template-rows: repeat(var(--camera-mobile-rows,3),minmax(0,1fr)); }
+ .viewer-details { top: 52px; max-height: calc(100% - 160px); }
+}
+@media(max-height: 480px) and (min-width: 600px) { .viewer-hud { top: 8px; } .viewer-rail { flex-basis: 74px; } .camera-choice { height: 60px; } .cinema-viewer .controls input[type=range] { order: initial; flex-basis: auto; } }

@@ -29,7 +29,11 @@ type Backingfiles struct {
 	Disk    string
 	MinSize int64 // smallest free space worth using
 	// Label is the filesystem label; empty means BackingfilesLabel.
-	Label  string
+	Label string
+	// Device, if set, is the filesystem to mount: the open encrypted
+	// volume. Nothing is created or added to fstab then, since the volume
+	// only exists once Glovebox has opened it.
+	Device string
 	Runner system.Runner
 }
 
@@ -44,6 +48,15 @@ func (b *Backingfiles) label() string {
 func (b *Backingfiles) Ensure(ctx context.Context) (created bool, err error) {
 	if _, err := b.Runner.Run(ctx, "mountpoint", "-q", b.Mountpoint); err == nil {
 		return false, nil // already mounted
+	}
+	if b.Device != "" {
+		if err := os.MkdirAll(b.Mountpoint, 0o755); err != nil {
+			return false, err
+		}
+		if _, err := b.Runner.Run(ctx, "mount", "-t", "xfs", "-o", "noatime", b.Device, b.Mountpoint); err != nil {
+			return false, fmt.Errorf("mounting %s: %w", b.Device, err)
+		}
+		return false, nil
 	}
 	dev := ""
 	if out, err := b.Runner.Run(ctx, "blkid", "-L", b.label()); err == nil {

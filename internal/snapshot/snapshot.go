@@ -29,6 +29,9 @@ const (
 	tocName   = "toc.json"  // path -> size of every file, to compare snapshots
 )
 
+// maxStackedMounts bounds how many times release unmounts one snapshot.
+const maxStackedMounts = 64
+
 var idPattern = regexp.MustCompile(`^snap-(\d{6})$`)
 
 // Snapshot is one point-in-time copy of the car's disk.
@@ -311,7 +314,10 @@ func (m *Manager) Restore(ctx context.Context) error {
 			}
 			continue
 		}
-		if m.mounted(ctx, snap.Mount) {
+		// Not snap.Mount: snapshots taken before the rename recorded the old
+		// mount root, which is never mounted, so they'd be mounted again on
+		// every restart, stacking mounts and loop devices.
+		if m.mounted(ctx, filepath.Join(m.MountRoot, snap.ID)) {
 			continue
 		}
 		dev, err := loopdev.Attach(ctx, m.Runner, filepath.Join(m.Dir, id, imageName), true)
@@ -349,9 +355,13 @@ func (m *Manager) mounted(ctx context.Context, path string) bool {
 // release undoes everything Take does, tolerating parts that don't exist.
 func (m *Manager) release(ctx context.Context, id string) error {
 	mnt := filepath.Join(m.MountRoot, id)
-	if m.mounted(ctx, mnt) {
-		// Lazy, so a clip being read (archived or played) can't keep the
-		// space from being freed; it goes once the reader is done.
+	// A loop, since it may be mounted more than once (Restore used to do
+	// that). Lazy, so a clip being read (archived or played) can't keep the
+	// space from being freed; it goes once the reader is done.
+	for i := 0; m.mounted(ctx, mnt); i++ {
+		if i == maxStackedMounts {
+			return fmt.Errorf("snapshot %s is still mounted after %d unmounts", id, i)
+		}
 		if _, err := m.Runner.Run(ctx, "umount", "--lazy", mnt); err != nil {
 			return fmt.Errorf("unmounting snapshot %s: %w", id, err)
 		}

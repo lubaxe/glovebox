@@ -48,17 +48,24 @@ func main() {
 	firstRun := flag.Bool("firstrun", false, "start as a Pi that isn't set up, on its setup network")
 	setupDone := flag.Bool("setupdone", false, "start as a Pi on home Wi-Fi with setup finished, for Guided setup")
 	updates := flag.String("update", "available", `software update to show: "available" or "current"`)
+	realClip := flag.String("real-clip", "", "optional local unencrypted front MP4, copied only into the isolated demo snapshot")
 	flag.Parse()
 
 	videos := filepath.Join(*footage, "videos")
-	if err := makeVideos(videos); err != nil {
-		log.Fatal(err)
+	if *realClip == "" {
+		if err := makeVideos(videos); err != nil {
+			log.Fatal(err)
+		}
 	}
 	mount := filepath.Join(*footage, "snapshot")
 	if err := os.RemoveAll(mount); err != nil {
 		log.Fatal(err)
 	}
-	if err := makeDrive(mount, videos, time.Now()); err != nil {
+	if *realClip != "" {
+		if err := makeRealDrive(mount, *realClip); err != nil {
+			log.Fatal(err)
+		}
+	} else if err := makeDrive(mount, videos, time.Now()); err != nil {
 		log.Fatal(err)
 	}
 
@@ -465,4 +472,36 @@ func (f *fakeUpdater) Install() error {
 		f.mu.Unlock()
 	}()
 	return nil
+}
+
+// makeRealDrive keeps real-clip QA local and separate from generated demo data.
+// The source file is opened read-only; it is never included in the repository.
+func makeRealDrive(mount, source string) error {
+	name := filepath.Base(source)
+	stamp := strings.TrimSuffix(name, "-front.mp4")
+	if _, err := time.Parse("2006-01-02_15-04-05", stamp); err != nil {
+		return fmt.Errorf("real clip must use Tesla's timestamp-front.mp4 filename: %w", err)
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	directory := filepath.Join(mount, "TeslaCam", "SavedClips", stamp)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	output, err := os.Create(filepath.Join(directory, name))
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(output, input)
+	closeErr := output.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.WriteFile(filepath.Join(directory, "event.json"), []byte(fmt.Sprintf("{\"timestamp\":\"%s\",\"reason\":\"Local viewer test\"}", stamp[:10]+"T"+strings.ReplaceAll(stamp[11:], "-", ":"))), 0o644)
 }

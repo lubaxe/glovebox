@@ -204,6 +204,27 @@ func (c *Car) Wake(ctx context.Context) error {
 	return err
 }
 
+// ErrNotPaired means the key isn't paired with the car yet.
+var ErrNotPaired = errors.New("the car isn't paired yet (Car page)")
+
+// Verify checks that the car in Bluetooth range is the one the key is
+// paired with, for unlocking the encrypted drive. ping is an authenticated
+// no-op: tesla-control only accepts the car's answer if it carries a tag
+// made with the session key that only the car and this key can derive, over
+// a fresh challenge. The session cache is skipped so the exchange is always
+// fresh. Nothing in the car changes.
+func (c *Car) Verify(ctx context.Context) error {
+	vin := c.VIN()
+	if vin == "" {
+		return errors.New("set the VIN first")
+	}
+	if _, ok := c.Paired(); !ok {
+		return ErrNotPaired
+	}
+	_, err := c.run(ctx, "-ble", "-vin", vin, "-key-file", c.KeyFile(), "-disable-session-cache", "ping")
+	return err
+}
+
 // ErrNotAllowed means the car refused a command for the key's role.
 var ErrNotAllowed = errors.New("not allowed for this key")
 

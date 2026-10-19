@@ -6,6 +6,7 @@ firmware-brcm80211
 pi-bluetooth
 raspberrypi-sys-mods
 xfsprogs
+cryptsetup-bin
 exfatprogs
 dosfstools
 fdisk

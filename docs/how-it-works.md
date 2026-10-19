@@ -60,6 +60,24 @@ Cars with **Encrypt Dashcam Recordings** on (Controls → Safety) record into `T
 
 Glovebox indexes them like any other clips but marks them encrypted: the web UI shows them with a lock and, instead of a player, offers the whole event or drive as one zip and opens dashcam.tesla.com. That site only accepts files from the computer it runs on, so they have to be downloaded and dropped on it; there's no way to hand them over directly. The backup copies them as they are to `EncryptedClips/` on the share.
 
+## Encrypted on the Pi
+
+Instead of the car's encryption, Glovebox can encrypt the footage on the Pi with a key that belongs to you. Clips stay plain for the car's own Dashcam viewer, Glovebox's player and the backup, but the card on its own can't be read. Turn it on in Settings → **Security**, after turning off Encrypt Dashcam Recordings in the car. The three choices (nothing, Glovebox, Tesla) are compared in the [README](../README.md#encryption).
+
+1. **Your key.** Glovebox makes an [age](https://age-encryption.org) key pair in your browser and gives you the key file to keep; only its public half goes to the Pi. You can use a key of your own (`age-keygen`) instead.
+2. **Encrypt the drive.** This needs your key, the car paired on the Car page, and everything backed up, because it **erases** the backingfiles partition: the car's drive, snapshots and log. Glovebox restarts, makes the partition a LUKS2 volume (Adiantum, which the Pi Zero 2 W runs at over 100 MB/s without AES instructions), and the car gets a fresh, empty drive a minute or two later.
+
+How it opens:
+
+- The volume opens with a random device key kept on the Pi (`/etc/glovebox/crypt/device.key`), but only once Glovebox has seen **its own car**: at every start it pings the car over Bluetooth with the paired key, and the car's reply is only accepted if it's authenticated with the session key that only that car and that key can make. With the car awake that takes about 2 seconds (9 on the first Bluetooth connection). It tries again until the car answers, quickly at first and then every 30 seconds; until then the car has no drive and can't record, and the web UI shows the drive as locked, with the attempts and the last error.
+- Once open, it stays open until the power is cut. Restarting Glovebox (new settings, an update) doesn't check again.
+- **Unlock with your key** on the locked page opens it without the car. The volume's master key is sealed to your public key in `glovebox-recovery/` on the boot partition, with a header backup and a README that shows how to open the card on a Linux PC.
+- `drive.encryption.car_check = "audit"` checks for the car and logs the result but opens the drive either way, for trying it out in the car.
+- Your key can be replaced while the drive is unlocked; the master key is sealed again to the new one. While it's locked it can't, so nobody on the network can swap in their own key and unlock with it.
+- The card's third partition is labelled `glovebox-crypt` and opens as `/dev/mapper/backingfiles`; Glovebox mounts it itself, so it has no line in `/etc/fstab`. Its key file, your public key and the request to encrypt are in `/etc/glovebox/crypt/`.
+
+What it doesn't do: the device key is on the Pi, so someone who takes the whole Pi and knows where to look can decrypt the card without the car. The car check stops someone powering up a stolen Pi and browsing the footage; it isn't a lock in hardware, which the Pi Zero 2 W doesn't have. While the drive is open, anyone who can reach the web page can watch the footage, as on an unencrypted drive. The NAS copy isn't encrypted.
+
 ## Backing up to a NAS
 
 The backup target is an SMB share, an NFS export, a folder on a server reached with rsync over SSH, or any rclone remote (`archive.type`). The web UI's Settings page configures it and tests it: it reaches the server, logs in, writes a small `.glovebox-test` file, reads its size back and deletes it.
@@ -135,3 +153,4 @@ The journal is kept in memory to spare the SD card, so it's lost when the car cu
 | `GET /api/setup`, `PUT /api/setup`, `POST /api/setup/test`, `POST /api/setup/ssh-key`, `PUT /api/setup/rclone-config` | The Settings page: read and save the backup target and extra drives (then Glovebox restarts), test a connection, make the SSH key for rsync, store an rclone.conf. Changes must be sent as JSON. |
 | `GET /api/update`, `POST /api/update/check`, `POST /api/update/install` | Software update on the Settings page: the running and latest versions (`?check=1` asks GitHub when the last check is over six hours old), check now, and install the latest release, which restarts Glovebox. |
 | `GET /api/car`, `PUT /api/car/vin`, `POST /api/car/pair`, `POST /api/car/check`, `POST /api/car/forget`, `GET /api/car/state` | Bluetooth pairing and keep-awake. Changes must be sent as JSON. |
+| `GET /api/encryption`, `PUT /api/encryption/recipient`, `POST /api/encryption/unlock`, `POST /api/encryption/encrypt` | Drive encryption: its state and what encrypting needs, set your public key (on an encrypted drive only while it's unlocked), unlock with your private key, and encrypt the drive (`{"confirm": "ERASE"}`; restarts Glovebox). Changes must be sent as JSON. |

@@ -200,7 +200,7 @@ fi
 
 say "Installing packages"
 apt-get update -q
-apt-get install -y -q --no-install-recommends xfsprogs exfatprogs dosfstools curl ca-certificates \
+apt-get install -y -q --no-install-recommends xfsprogs cryptsetup-bin exfatprogs dosfstools curl ca-certificates \
 	rsync rclone nfs-common openssh-client dnsmasq-base avahi-daemon
 apt-get clean # the downloaded packages, not needed any more
 

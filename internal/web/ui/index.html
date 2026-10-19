@@ -62,41 +62,52 @@
         <h1><svg class="logo topbar-logo" aria-hidden="true"><use href="#logo"/></svg><span id="title">Overview</span></h1>
         <div id="chips" class="chips" aria-live="polite"></div>
       </header>
+      <aside id="update-notice" class="update-notice" aria-live="polite" aria-label="Software update available" hidden></aside>
       <main id="view"></main>
     </div>
   </div>
 
   <template id="player-tpl">
-    <section class="player">
-      <div class="player-head">
-        <a class="icon-btn" id="back" title="Back"><svg><use href="#i-back"/></svg></a>
-        <div class="player-titles">
-          <h2 id="player-title"></h2>
-          <p id="player-sub" class="muted"></p>
+    <section class="player cinema-viewer" aria-label="Dashcam viewer">
+      <div class="viewer-stage">
+        <div id="cams" class="cams"></div>
+        <time id="viewer-time" class="viewer-time"></time>
+        <div id="viewer-telemetry" class="viewer-hud" aria-label="Recorded vehicle telemetry">
+          <span id="hud-gear" class="hud-gear" title="Recorded gear">—</span>
+          <div class="hud-speed"><strong id="hud-speed">—</strong><button id="hud-unit" type="button" title="Change speed units">MPH</button></div>
+          <div id="hud-steering" class="hud-steering"><svg id="hud-wheel" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="12"/><path d="M5 12h22M16 16v12M7 13l9 5 9-5"/></svg><span id="hud-assist">—</span></div>
+          <div class="hud-signals"><span id="hud-left" title="Recorded left turn signal">←</span><span id="hud-brake" title="Recorded brake">BRAKE</span><span id="hud-throttle" title="Recorded accelerator">—</span><span id="hud-right" title="Recorded right turn signal">→</span></div>
+          <span id="hud-status" class="hud-status">Reading recorded telemetry…</span>
+        </div>
+        <div class="viewer-actions">
+          <button id="viewer-info" type="button" class="icon-btn" aria-label="Clip details and telemetry" aria-controls="viewer-details" aria-expanded="false" title="Clip details and telemetry"><svg><use href="#i-gear"/></svg></button>
+          <button id="viewer-fullscreen" type="button" class="icon-btn" aria-label="Enter fullscreen" title="Enter fullscreen"><svg viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/></svg></button>
+          <a id="viewer-download" class="icon-btn" aria-label="Download selected camera" title="Download selected camera"><svg><use href="#i-download"/></svg></a>
+          <a id="back" class="icon-btn" aria-label="Close viewer" title="Close viewer"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></a>
+        </div>
+        <aside id="viewer-details" class="viewer-details" aria-label="Clip details" hidden>
+          <div class="player-head"><div class="player-titles"><h2 id="player-title"></h2><p id="player-sub" class="muted"></p></div></div>
+          <h3>Recorded vehicle data</h3><dl id="telemetry-details" class="kv"></dl>
+          <h3>Choose a minute</h3><div class="strip" id="clip-strip"></div>
+          <details class="panel downloads"><summary><svg><use href="#i-download"/></svg> Downloads</summary><div id="downloads" class="file-chips"></div></details>
+        </aside>
+        <div class="controls">
+          <button class="icon-btn" id="prev" type="button" title="Previous minute" aria-label="Previous minute"><svg><use href="#i-prev"/></svg></button>
+          <button class="play-btn" id="play" type="button" title="Play / pause (space)" aria-label="Play"><svg><use href="#i-play"/></svg></button>
+          <button class="icon-btn" id="next" type="button" title="Next minute" aria-label="Next minute"><svg><use href="#i-next"/></svg></button>
+          <span id="clock" class="clock">--:--:--</span>
+          <input id="scrub" type="range" min="0" max="0" step="0.1" value="0" aria-label="Position">
+          <select id="speed" aria-label="Playback speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
         </div>
       </div>
-      <div id="cams" class="cams"></div>
-      <div class="controls">
-        <button class="icon-btn" id="prev" type="button" title="Previous minute"><svg><use href="#i-prev"/></svg></button>
-        <button class="play-btn" id="play" type="button" title="Play / pause (space)"><svg><use href="#i-play"/></svg></button>
-        <button class="icon-btn" id="next" type="button" title="Next minute"><svg><use href="#i-next"/></svg></button>
-        <span id="clock" class="clock">--:--:--</span>
-        <input id="scrub" type="range" min="0" max="0" step="0.1" value="0" aria-label="Position">
-        <select id="speed" aria-label="Speed">
-          <option value="1">1&times;</option>
-          <option value="2">2&times;</option>
-          <option value="4">4&times;</option>
-        </select>
-      </div>
-      <div class="strip" id="clip-strip"></div>
-      <details class="panel downloads">
-        <summary><svg><use href="#i-download"/></svg> Download this minute</summary>
-        <div id="downloads" class="file-chips"></div>
-      </details>
+      <div id="camera-rail" class="viewer-rail" role="toolbar" aria-label="Camera views"></div>
     </section>
   </template>
 
+
+  <script src="agekey.js"></script>
   <script src="setup.js"></script>
+  <script src="telemetry.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

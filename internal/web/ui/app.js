@@ -45,9 +45,13 @@ async function send(method, path, body = {}) {
   return data;
 }
 
+// MEDIA_LAYOUT changes when the server presents recordings differently
+// (2: index first), so browsers don't mix cached pieces of the old layout.
+const MEDIA_LAYOUT = 2;
+
 function mediaURL(file, download) {
   const p = file.path.split('/').map(encodeURIComponent).join('/');
-  return `/media/${encodeURIComponent(file.snapshot)}/${p}${download ? '?download=1' : ''}`;
+  return `/media/${encodeURIComponent(file.snapshot)}/${p}?layout=${MEDIA_LAYOUT}${download ? '&download=1' : ''}`;
 }
 
 // The car records local time without a zone, e.g. "2026-10-15T00:39:00".
@@ -143,8 +147,11 @@ function page(name, title, ...nodes) {
   document.title = title === 'Overview' ? 'Glovebox' : `${title} · Glovebox`;
   $('#title').textContent = title;
   for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('active', a.dataset.nav === name.split(':')[0]);
+  document.body.classList.toggle('viewer-active', nodes.some(node => node?.classList?.contains('cinema-viewer')));
+  $('.content').classList.toggle('viewer-open', document.body.classList.contains('viewer-active'));
   $('#view').replaceChildren(...nodes);
   window.scrollTo(0, 0);
+  $('.content').scrollTop = 0; // Mobile scrolls the content, independently of its fixed navigation.
 }
 
 function loading() { return el('p', { class: 'muted' }, 'Loading…'); }
@@ -155,16 +162,23 @@ function empty(iconName, title, text) {
 
 // ---------- status ----------
 
-const status = { system: null, drive: null, archive: null, car: null };
+const status = { system: null, drive: null, archive: null, car: null, encryption: null };
+
+// driveLocked: the drive is encrypted and waits for the car or the user's key.
+const driveLocked = () => status.encryption?.encrypted && status.encryption.state === 'waiting';
 
 async function refreshStatus() {
-  const [st, dr, ar, car] = await Promise.allSettled([api('/api/status'), api('/api/drive'), api('/api/archive'), api('/api/car')]);
+  const [st, dr, ar, car, enc] = await Promise.allSettled([api('/api/status'), api('/api/drive'), api('/api/archive'), api('/api/car'), api('/api/encryption')]);
+  const wasLocked = driveLocked();
   status.system = st.status === 'fulfilled' ? st.value : null;
   status.drive = dr.status === 'fulfilled' ? dr.value : null;
   status.archive = ar.status === 'fulfilled' ? ar.value : null;
   status.car = car.status === 'fulfilled' ? car.value : null;
+  status.encryption = enc.status === 'fulfilled' ? enc.value : null;
   renderChips();
   renderFoot();
+  if (wasLocked !== driveLocked() && current !== 'settings' && current !== 'car') route();
+  else if (current === 'locked') renderLocked();
   if (current === 'overview') renderOverviewStats();
   if (current === 'car' && status.car) renderCarStatus(status.car);
 }
@@ -174,6 +188,7 @@ function chip(text, state, title, minor) {
 }
 
 function usbState() {
+  if (driveLocked()) return { text: 'Drive locked', state: 'warn', detail: 'Encrypted: waiting for the car, or your key.' };
   const d = status.drive;
   if (!d) return { text: 'Drive off', state: 'bad', detail: 'The drive is disabled or failed to start.' };
   if (d.gadget.host_state === 'configured') return { text: 'Car connected', state: 'ok', detail: 'The car is using the drive.' };
@@ -223,7 +238,7 @@ function renderFoot() {
     el('div', {}, s.system.hostname),
     el('div', {}, `version ${s.version}`),
     updateInfo?.available && updateInfo.latest && updateInfo.state === 'idle'
-      ? el('a', { class: 'update-link', href: '#/settings' }, `${updateInfo.latest.version} is available`) : '');
+      ? el('a', { class: 'update-link', href: '#/settings/updates' }, `${updateInfo.latest.version} is available`) : '');
 }
 
 // ---------- overview ----------
@@ -335,7 +350,7 @@ async function showOverview() {
         el('h2', {}, 'Latest drives'),
         el('a', { href: '#/recent' }, `All ${ds.length} →`)),
       locked ? el('p', { class: 'muted', style: 'margin:-6px 0 12px' },
-        `${locked === minutes.length ? 'All of this footage is' : 'Some of this footage is'} encrypted by your car: open a drive to download it for dashcam.tesla.com.`) : null,
+        `${locked === minutes.length ? 'All of this footage is' : 'Some of this footage is'} encrypted by your car: open a drive to download it for dashcam.tesla.com.`) : '', // append() writes null as "null"
       el('div', { class: 'grid' }, ds.slice(0, 4).map(driveCard)));
     if (!events.length) {
       latest.append(el('p', { class: 'muted', style: 'margin-top:18px;font-size:14px' },
@@ -548,21 +563,48 @@ const player = {
     $('#player-title').textContent = title;
     $('#player-sub').replaceChildren(...sub);
     this.zipURL = zipURL;
+    this.speedUnit = 'mph';
+    try { this.speedUnit = localStorage.getItem('glovebox-speed-unit') === 'kmh' ? 'kmh' : 'mph'; } catch { /* Optional preference. */ }
 
     const set = new Set();
     for (const c of clips) for (const cam of Object.keys(c.cameras)) set.add(cam);
     this.cams = sortCameras(set);
     this.videos = {};
+    $('#cams').style.setProperty('--camera-columns', Math.min(3, this.cams.length));
+    $('#cams').style.setProperty('--camera-rows', Math.ceil(this.cams.length / 3));
+    $('#cams').style.setProperty('--camera-mobile-columns', Math.min(2, this.cams.length));
+    $('#cams').style.setProperty('--camera-mobile-rows', Math.ceil(this.cams.length / 2));
     $('#cams').replaceChildren(...this.cams.map((cam) => {
       const v = el('video', { muted: true, playsinline: true, preload: 'auto' });
       v.muted = true;
       v.addEventListener('timeupdate', () => this.onTime(v));
       v.addEventListener('ended', () => this.onEnded(v));
       v.addEventListener('loadedmetadata', () => { v.playbackRate = this.speed; });
+      v.addEventListener('loadeddata', () => this.drawThumbnails(true));
+      v.addEventListener('seeked', () => this.drawThumbnails(true));
       this.videos[cam] = v;
       return el('div', { class: 'cam', 'data-cam': cam, onclick: () => this.focus(cam) },
         v, el('span', { class: 'label' }, CAMERA_NAMES[cam] || cam));
     }));
+    this.buildCameraRail();
+    $('#viewer-info').addEventListener('click', () => {
+      const details = $('#viewer-details');
+      details.hidden = !details.hidden;
+      $('#viewer-info').setAttribute('aria-expanded', String(!details.hidden));
+      this.renderTelemetry(this.master?.currentTime || 0);
+    });
+    $('#hud-unit').addEventListener('click', () => {
+      this.speedUnit = this.speedUnit === 'mph' ? 'kmh' : 'mph';
+      try { localStorage.setItem('glovebox-speed-unit', this.speedUnit); } catch { /* Optional preference. */ }
+      this.renderTelemetry(this.master?.currentTime || 0);
+    });
+    const fullscreen = $('#viewer-fullscreen');
+    fullscreen.hidden = !document.fullscreenEnabled;
+    fullscreen.addEventListener('click', async () => {
+      try { if (document.fullscreenElement) await document.exitFullscreen(); else await view.requestFullscreen(); }
+      catch { fullscreen.title = 'Fullscreen is unavailable in this browser'; }
+    });
+    view.addEventListener('fullscreenchange', () => { fullscreen.setAttribute('aria-label', document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen'); });
     $('#clip-strip').replaceChildren(...clips.map((c, k) =>
       el('button', { type: 'button', onclick: () => this.load(k, this.playing) }, fmtTime(carTime(c.start)))));
 
@@ -583,7 +625,9 @@ const player = {
   },
 
   load(i, autoplay) {
+    this.stopFrameUpdates();
     this.i = i;
+    this.clockSecond = null;
     const clip = this.clips[i];
     this.master = null;
     for (const cam of this.cams) {
@@ -594,34 +638,67 @@ const player = {
       if (file) {
         v.src = mediaURL(file);
         box.classList.remove('missing');
-        if (!this.master) this.master = v;
       } else {
         v.removeAttribute('src');
         v.load();
         box.classList.add('missing');
       }
     }
+    this.pickMaster();
     for (const [k, b] of [...$('#clip-strip').children].entries()) b.classList.toggle('current', k === i);
     $('#downloads').replaceChildren(...this.cams.filter((c) => clip.cameras[c]).map((c) =>
       el('a', { href: mediaURL(clip.cameras[c], true) }, icon('download'), CAMERA_NAMES[c] || c)),
       this.zipURL ? el('a', { href: this.zipURL, download: '' }, icon('download'), `Everything (${gb(clipBytes(this.clips))} zip)`) : '');
     this.updateClock(0);
+    this.updateCameraDownload();
+    this.drawThumbnails(true);
+    this.startFrameUpdates();
+    this.loadTelemetry(clip);
+    $('#prev').disabled = i === 0;
+    $('#next').disabled = i + 1 >= this.clips.length;
     if (autoplay) this.play();
   },
 
   setPlayIcon(name) {
     const b = $('#play');
-    if (b) b.replaceChildren(icon(name));
+    if (b) { b.replaceChildren(icon(name)); b.setAttribute('aria-label', name === 'pause' ? 'Pause' : 'Play'); }
+  },
+
+  // active is what streams: the camera on screen, or every camera in the
+  // grid. All six at once need about 43 Mbit/s, more than the Pi's Wi-Fi
+  // gives; Safari then never starts playing. The others keep the frame they
+  // loaded, for the thumbnails.
+  active() {
+    const loaded = this.cams.map((c) => this.videos[c]).filter((v) => v?.getAttribute('src'));
+    if (this.selectedCamera === 'grid') return loaded;
+    const main = this.videos[this.selectedCamera];
+    return main?.getAttribute('src') ? [main] : loaded.slice(0, 1);
+  },
+
+  // pickMaster makes the first active video the one the others, the clock
+  // and the HUD follow, and lets only the active ones buffer ahead.
+  pickMaster() {
+    const active = this.active();
+    this.master = active[0] || null;
+    for (const v of Object.values(this.videos)) v.preload = active.includes(v) ? 'auto' : 'metadata';
   },
 
   play() {
     this.playing = true;
     this.setPlayIcon('pause');
-    for (const v of Object.values(this.videos)) {
-      if (v.getAttribute('src')) {
-        v.playbackRate = this.speed;
-        v.play().catch(() => {});
-      }
+    const active = this.active();
+    for (const v of Object.values(this.videos)) if (!active.includes(v)) v.pause();
+    for (const v of active) {
+      v.playbackRate = this.speed;
+      v.play().catch((e) => {
+        // A browser that won't play the main camera (not yet loaded, or a
+        // limit on videos playing at once) shouldn't look like it's playing.
+        if (v === this.master && e.name !== 'AbortError') {
+          this.playing = false;
+          this.setPlayIcon('play');
+          $('#viewer-time').textContent = `Can't play here: ${e.message || e.name}`;
+        }
+      });
     }
   },
 
@@ -632,6 +709,9 @@ const player = {
   },
 
   stop() {
+    this.stopFrameUpdates();
+    this.telemetryController?.abort();
+    this.telemetrySamples = [];
     this.playing = false;
     for (const v of Object.values(this.videos)) {
       v.pause();
@@ -645,13 +725,16 @@ const player = {
   // keep the other cameras within a quarter second of the master
   onTime(v) {
     if (v !== this.master) return;
-    for (const other of Object.values(this.videos)) {
-      if (other !== v && other.getAttribute('src') && Math.abs(other.currentTime - v.currentTime) > 0.25) {
+    for (const other of this.active()) {
+      if (other !== v && Math.abs(other.currentTime - v.currentTime) > 0.25) {
         other.currentTime = v.currentTime;
       }
     }
     if (!this.scrubbing) $('#scrub').value = this.i * 60 + v.currentTime;
-    this.updateClock(v.currentTime);
+    // Frame callbacks keep the clock and HUD in step with the picture, but
+    // some browsers stop sending them (a hidden or throttled video): then
+    // the regular time updates keep the clock moving.
+    if (!this.frameVideo || performance.now() - (this.lastFrameAt || 0) > 500) this.updateClock(v.currentTime);
   },
 
   onEnded(v) {
@@ -665,10 +748,9 @@ const player = {
     seconds = Math.max(0, Math.min(seconds, total - 0.1));
     const k = Math.min(Math.floor(seconds / 60), this.clips.length - 1);
     const offset = seconds - k * 60;
+    // only the cameras streaming; the others catch up when they're shown
     const apply = () => {
-      for (const v of Object.values(this.videos)) {
-        if (v.getAttribute('src')) v.currentTime = Math.min(offset, (v.duration || 60) - 0.1);
-      }
+      for (const v of this.active()) v.currentTime = Math.min(offset, (v.duration || 60) - 0.1);
     };
     if (k !== this.i) {
       const playing = this.playing;
@@ -681,21 +763,183 @@ const player = {
 
   updateClock(offset) {
     const clip = this.clips[this.i];
-    if (clip) $('#clock').textContent = fmtClock(new Date(carTime(clip.start).getTime() + offset * 1000));
+    if (clip) {
+      const date = new Date(carTime(clip.start).getTime() + offset * 1000);
+      const second = Math.floor(date.getTime() / 1000);
+      if (this.clockSecond !== second) {
+        this.clockSecond = second;
+        $('#clock').textContent = fmtClock(date);
+        $('#viewer-time').textContent = date.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        $('#viewer-time').dateTime = date.toISOString();
+      }
+      this.renderTelemetry(offset);
+      this.drawThumbnails();
+    }
   },
 
-  focus(cam) {
-    const cams = $('#cams');
-    const box = cams.querySelector(`[data-cam="${cam}"]`);
-    const already = box.classList.contains('main');
-    for (const b of cams.children) { b.classList.remove('main'); b.style.order = ''; }
-    cams.classList.toggle('focused', !already);
-    if (!already) { box.classList.add('main'); box.style.order = '-1'; }
+  startFrameUpdates() {
+    const video = this.master;
+    if (!video?.requestVideoFrameCallback) return;
+    this.frameVideo = video;
+    const draw = (_now, frame) => {
+      if (this.frameVideo !== video || !this.clips.length) return;
+      this.lastFrameAt = performance.now();
+      this.updateClock(frame.mediaTime);
+      this.frameRequest = video.requestVideoFrameCallback(draw);
+    };
+    this.frameRequest = video.requestVideoFrameCallback(draw);
   },
+
+  stopFrameUpdates() {
+    if (this.frameVideo && this.frameRequest != null) this.frameVideo.cancelVideoFrameCallback(this.frameRequest);
+    this.frameVideo = null;
+    this.frameRequest = null;
+  },
+
+  buildCameraRail() {
+    this.thumbnailCanvases = {};
+    const choice = (id, label) => {
+      const canvas = el('canvas', { width: '240', height: '135', 'aria-hidden': 'true' });
+      this.thumbnailCanvases[id] = canvas;
+      return el('button', { type: 'button', class: 'camera-choice', 'data-camera': id,
+        'aria-label': label, 'aria-pressed': 'false', onclick: () => this.focus(id) }, canvas, el('span', {}, label));
+    };
+    $('#camera-rail').replaceChildren(choice('grid', 'Grid'), ...this.cams.map(cam => choice(cam, CAMERA_NAMES[cam] || cam)));
+    this.focus(this.cams.includes('front') ? 'front' : this.cams[0]);
+    this.lastThumbnailDraw = 0;
+  },
+
+  drawThumbnails(force = false) {
+    if (!force && performance.now() - this.lastThumbnailDraw < 250) return;
+    this.lastThumbnailDraw = performance.now();
+    const mosaic = this.thumbnailCanvases?.grid;
+    const grid = mosaic?.getContext('2d');
+    grid?.clearRect(0, 0, mosaic.width, mosaic.height);
+    this.cams.forEach((cam, index) => {
+      const canvas = this.thumbnailCanvases?.[cam], video = this.videos[cam];
+      if (!canvas) return;
+      const context = canvas.getContext('2d');
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      if (!video || video.readyState < 2 || !video.getAttribute('src')) return;
+      try {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const columns = Math.min(3, this.cams.length), rows = Math.ceil(this.cams.length / columns);
+        grid?.drawImage(video, index % columns * mosaic.width / columns, Math.floor(index / columns) * mosaic.height / rows, mosaic.width / columns, mosaic.height / rows);
+      } catch { /* A camera still seeking will draw on its next frame. */ }
+    });
+  },
+
+  async loadTelemetry(clip) {
+    this.telemetryController?.abort();
+    const controller = new AbortController();
+    this.telemetryController = controller;
+    this.telemetrySamples = [];
+    this.telemetryState = 'Reading recorded telemetry…';
+    this.renderTelemetry(0);
+    this.telemetryCache ||= new Map();
+    for (const camera of ['front', ...this.cams.filter(c => c !== 'front')]) {
+      const file = clip.cameras[camera];
+      if (!file) continue;
+      const url = '/api/telemetry/' + encodeURIComponent(file.snapshot) + '/' + file.path.split('/').map(encodeURIComponent).join('/');
+      try {
+        let result = this.telemetryCache.get(url);
+        if (!result) {
+          const response = await fetch(url, { signal: controller.signal });
+          if (!response.ok) continue;
+          result = await response.json();
+          this.telemetryCache.set(url, result);
+          while (this.telemetryCache.size > 6) this.telemetryCache.delete(this.telemetryCache.keys().next().value);
+        }
+        if (controller.signal.aborted || this.clips[this.i] !== clip) return;
+        if (result.samples?.length) {
+          this.telemetrySamples = result.samples;
+          this.telemetryState = '';
+          this.renderTelemetry(this.master?.currentTime || 0);
+          return;
+        }
+      } catch (error) { if (controller.signal.aborted) return; }
+    }
+    if (!controller.signal.aborted && this.clips[this.i] === clip) {
+      this.telemetryState = 'No telemetry recorded in this clip';
+      this.renderTelemetry(this.master?.currentTime || 0);
+    }
+  },
+
+  renderTelemetry(offset) {
+    if (!$('#viewer-telemetry')) return;
+    const sample = window.GloveboxTelemetry.at(this.telemetrySamples || [], offset);
+    $('#hud-status').textContent = sample ? '' : this.telemetryState || 'No telemetry for this moment';
+    $('#viewer-telemetry').classList.toggle('unavailable', !sample);
+    $('#hud-speed').textContent = sample ? window.GloveboxTelemetry.speed(sample.speed_mps, this.speedUnit) : '—';
+    $('#hud-gear').textContent = sample ? ['P', 'D', 'R', 'N'][sample.gear] || '?' : '—';
+    $('#hud-unit').textContent = this.speedUnit === 'kmh' ? 'KM/H' : 'MPH';
+    $('#hud-unit').setAttribute('aria-label', 'Change speed units, currently ' + $('#hud-unit').textContent);
+    $('#hud-assist').textContent = sample ? ['Manual', 'FSD', 'Autosteer', 'TACC'][sample.autopilot] || 'Unknown' : '—';
+    $('#hud-wheel').style.transform = 'rotate(' + (sample?.steering_deg || 0) + 'deg)';
+    $('#hud-left').classList.toggle('active', !!sample?.left);
+    $('#hud-right').classList.toggle('active', !!sample?.right);
+    $('#hud-brake').classList.toggle('active', !!sample?.brake);
+    $('#hud-throttle').textContent = sample ? Math.round(sample.accelerator * 100) + '%' : '—';
+    $('#hud-throttle').style.setProperty('--pedal', (Math.max(0, Math.min(1, sample?.accelerator || 0)) * 100) + '%');
+    $('#hud-steering').classList.toggle('assisted', !!sample && sample.autopilot > 0);
+    $('#hud-throttle').title = sample ? 'Recorded accelerator pedal: ' + (sample.accelerator * 100).toFixed(1) + '% (not motor power)' : 'No recorded accelerator data';
+    if (!$('#viewer-details').hidden) {
+      const rows = sample ? [
+        ['Speed', window.GloveboxTelemetry.speed(sample.speed_mps, this.speedUnit) + (this.speedUnit === 'kmh' ? ' km/h' : ' mph')],
+        ['Gear', ['Park', 'Drive', 'Reverse', 'Neutral'][sample.gear] || 'Unknown'],
+        ['Steering wheel', sample.steering_deg.toFixed(1) + '°'],
+        ['Accelerator', (sample.accelerator * 100).toFixed(1) + '%'],
+        ['Brake', sample.brake ? 'Applied' : 'Released'],
+        ['Turn signals', [sample.left ? 'Left' : '', sample.right ? 'Right' : ''].filter(Boolean).join(' + ') || 'Off'],
+        ['Driving assistance', ['None', 'Self-driving', 'Autosteer', 'Traffic-aware cruise'][sample.autopilot] || 'Unknown'],
+        ['Latitude / longitude', sample.latitude.toFixed(6) + ', ' + sample.longitude.toFixed(6)],
+        ['Heading', sample.heading.toFixed(1) + '°'],
+        ['Acceleration X / Y / Z', [sample.accel_x, sample.accel_y, sample.accel_z].map(n => n.toFixed(2)).join(' / ') + ' m/s²'],
+        ['Frame / schema', sample.frame + ' / v' + sample.version],
+      ] : [['Telemetry', this.telemetryState || 'No recorded sample at this moment']];
+      $('#telemetry-details').replaceChildren(...rows.flatMap(([key, value]) => [el('dt', {}, key), el('dd', {}, value)]));
+    }
+  },
+
+  updateCameraDownload() {
+    const camera = this.selectedCamera === 'grid' ? (this.cams.includes('front') ? 'front' : this.cams[0]) : this.selectedCamera;
+    const file = this.clips[this.i]?.cameras[camera];
+    const link = $('#viewer-download');
+    if (!link) return;
+    if (file) { link.href = mediaURL(file, true); link.setAttribute('download', ''); }
+    else { link.removeAttribute('href'); link.removeAttribute('download'); }
+    link.setAttribute('aria-disabled', String(!file));
+    link.setAttribute('aria-label', 'Download ' + (CAMERA_NAMES[camera] || camera) + ' camera');
+    link.title = file ? 'Download ' + (CAMERA_NAMES[camera] || camera) + ' camera' : 'Camera was not recorded in this minute';
+  },
+
+  focus(camera) {
+    if (camera !== 'grid' && !this.cams.includes(camera)) return;
+    this.selectedCamera = camera;
+    $('#cams').classList.toggle('viewer-grid', camera === 'grid');
+    for (const box of $('#cams').children) box.classList.toggle('main', box.dataset.cam === camera);
+    for (const button of $('#camera-rail').children) button.setAttribute('aria-pressed', String(button.dataset.camera === camera));
+    this.updateCameraDownload();
+    // Switch what streams, picking up where the old view was.
+    if (!this.master) return; // nothing loaded yet
+    const at = this.master.currentTime;
+    this.stopFrameUpdates();
+    this.pickMaster();
+    for (const v of this.active()) if (Math.abs(v.currentTime - at) > 0.25) v.currentTime = at;
+    if (this.playing) this.play();
+    else for (const v of Object.values(this.videos)) v.pause();
+    this.startFrameUpdates();
+  },
+
 };
 
 document.addEventListener('keydown', (e) => {
-  if (!player.clips.length || e.target.closest('input, select, textarea')) return;
+  if (!player.clips.length || e.target.closest('input, select, textarea, button, a, [contenteditable=true]')) return;
+  if (e.key === 'Escape' && !document.fullscreenElement) {
+    if (!$('#viewer-details').hidden) { $('#viewer-details').hidden = true; $('#viewer-info').setAttribute('aria-expanded', 'false'); }
+    else location.hash = $('#back').getAttribute('href');
+    return;
+  }
   if (e.key === ' ') { e.preventDefault(); player.playing ? player.pause() : player.play(); }
   if (e.key === 'ArrowRight') player.seek(player.i * 60 + (player.master?.currentTime || 0) + 5);
   if (e.key === 'ArrowLeft') player.seek(player.i * 60 + (player.master?.currentTime || 0) - 5);
@@ -985,25 +1229,320 @@ function renderCarStatus(car) {
     holdBtn ? el('div', { class: 'row', style: 'margin-top:12px' }, holdBtn) : null);
 }
 
+// ---------- encrypted drive ----------
+
+// keyInput is a box for the user's private key, filled by typing, pasting
+// or choosing their key file.
+function keyInput() {
+  const area = el('textarea', { rows: 3, placeholder: 'AGE-SECRET-KEY-1…', spellcheck: 'false', autocomplete: 'off' });
+  const file = el('input', { type: 'file', accept: '.txt,text/plain' });
+  file.addEventListener('change', async () => { if (file.files[0]) area.value = await file.files[0].text(); });
+  return { area, node: el('div', {}, area, el('label', { class: 'field-hint', style: 'display:block;margin-top:6px' }, 'Or choose your key file: ', file)) };
+}
+
+let lockedBox = null; // the locked page's status, refreshed with the status
+
+// showLockedDrive stands in for the footage pages while the encrypted drive
+// waits for the car.
+function showLockedDrive() {
+  const k = keyInput();
+  const out = el('div');
+  const unlock = el('button', { class: 'btn btn-primary', type: 'button' }, 'Unlock');
+  unlock.addEventListener('click', async () => {
+    unlock.disabled = true;
+    out.replaceChildren(updateResult('busy', 'Unlocking…'));
+    try {
+      await send('POST', '/api/encryption/unlock', { identity: k.area.value });
+      k.area.value = '';
+      out.replaceChildren(updateResult('ok', 'Unlocked. Starting the drive…'));
+      setTimeout(refreshStatus, 1500);
+    } catch (e) {
+      out.replaceChildren(updateResult('bad', e.message));
+      unlock.disabled = false;
+    }
+  });
+  const box = el('div');
+  page('locked', 'Drive locked', el('div', { class: 'setup-page' },
+    el('div', { class: 'panel' },
+      el('h2', { style: 'margin-top:0' }, 'The drive is locked'),
+      el('p', {}, 'The footage is encrypted. Glovebox opens it, and gives the car its drive, once it has seen your car over Bluetooth. ',
+        'Until then the car can\'t record.'),
+      box),
+    el('div', { class: 'panel' },
+      el('h3', { style: 'margin-top:0' }, 'Unlock with your key'),
+      el('p', { class: 'muted' }, 'Your key goes to the Pi over this connection to open the drive, and isn\'t kept.'),
+      k.node, el('div', { class: 'row', style: 'margin-top:12px' }, unlock), out)));
+  lockedBox = box;
+  renderLocked();
+}
+
+function renderLocked() {
+  if (!lockedBox) return;
+  const e = status.encryption || {};
+  lockedBox.replaceChildren(el('dl', { class: 'kv' },
+    el('dt', {}, 'Car check'), el('dd', {}, e.attempts ? `Tried ${e.attempts} time${e.attempts > 1 ? 's' : ''}, still trying` : 'Checking…'),
+    e.last_error ? [el('dt', {}, 'Last try'), el('dd', {}, `${e.last_try ? `${ago(new Date(e.last_try))}: ` : ''}${e.last_error}`)] : null));
+}
+
+const UNLOCKED_BY = {
+  car: 'when Glovebox saw the car', audit: 'without waiting for the car (audit mode)', key: 'with your key',
+  restart: 'earlier while the car was awake', create: 'when it was encrypted',
+};
+
+// mountEncryption is the Settings panel for the encrypted drive.
+function mountEncryption(box) {
+  let st = null;
+  let error = '';
+  let pair = null; // a key pair made here, until it's in use
+  let replacing = false;
+  let mode = ''; // 'new' or 'own' while choosing a key
+
+  async function load(method, path, body) {
+    try {
+      st = method ? await send(method, path, body) : await api('/api/encryption');
+      error = '';
+    } catch (e) {
+      error = e.message;
+      if (!st) { // no drive here
+        box.replaceChildren(el('h3', {}, 'Drive encryption'), el('p', { class: 'muted' }, `Not available: ${error}`));
+        return;
+      }
+    }
+    if (box.isConnected) render();
+  }
+
+  function keyChooser() {
+    const parts = [];
+    if (mode === 'new' && pair) {
+      const blob = new Blob([window.GloveboxAgeKey.keyFile(pair)], { type: 'text/plain' });
+      const link = el('a', { class: 'btn', href: URL.createObjectURL(blob), download: 'glovebox-key.txt' }, icon('download'), 'Download your key file');
+      const saved = el('input', { type: 'checkbox' });
+      const use = el('button', { class: 'btn btn-primary', type: 'button', disabled: true }, 'Use this key');
+      saved.addEventListener('change', () => { use.disabled = !saved.checked; });
+      use.addEventListener('click', async () => {
+        use.disabled = true;
+        await load('PUT', '/api/encryption/recipient', { recipient: pair.publicKey });
+        if (!error) { pair = null; mode = ''; replacing = false; render(); }
+      });
+      parts.push(
+        el('p', {}, 'Your key was made in this browser; only its public half goes to Glovebox. ',
+          'Keep the file somewhere safe off the Pi, such as a password manager: if the Pi dies, it\'s the only way to open the footage.'),
+        el('div', { class: 'row' }, link),
+        el('label', { class: 'check' }, saved, el('span', {}, 'I\'ve saved my key file somewhere safe')),
+        el('div', { class: 'row' }, use));
+    } else if (mode === 'own') {
+      const input = el('input', { type: 'text', placeholder: 'age1…', spellcheck: 'false', autocomplete: 'off' });
+      const save = el('button', { class: 'btn btn-primary', type: 'button' }, 'Use this key');
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        await load('PUT', '/api/encryption/recipient', { recipient: input.value });
+        if (!error) { mode = ''; replacing = false; render(); } else save.disabled = false;
+      });
+      parts.push(el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Your age public key'), input,
+        el('span', { class: 'field-hint' }, 'The "public key" line from age-keygen. The private key stays with you.')),
+      el('div', { class: 'row', style: 'margin-top:10px' }, save));
+    } else {
+      const make = el('button', { class: 'btn btn-primary', type: 'button' }, 'Create a key');
+      make.addEventListener('click', () => { pair = window.GloveboxAgeKey.generate(); mode = 'new'; render(); });
+      const own = el('button', { class: 'btn', type: 'button' }, 'Use my own age key');
+      own.addEventListener('click', () => { mode = 'own'; render(); });
+      parts.push(el('div', { class: 'row' }, make, own));
+    }
+    if (st.recipient) {
+      const cancel = el('button', { class: 'btn', type: 'button' }, 'Keep the current key');
+      cancel.addEventListener('click', () => { replacing = false; mode = ''; pair = null; render(); });
+      parts.push(el('div', { class: 'row', style: 'margin-top:10px' }, cancel));
+    }
+    return parts;
+  }
+
+  function keySection(canReplace) {
+    if (!st.recipient || replacing) return keyChooser();
+    const parts = [el('dl', { class: 'kv' }, el('dt', {}, 'Public key'),
+      el('dd', { style: 'word-break:break-all;font-family:var(--mono);font-size:13px' }, st.recipient))];
+    if (canReplace) {
+      const replace = el('button', { class: 'btn', type: 'button' }, 'Replace key');
+      replace.addEventListener('click', () => { replacing = true; render(); });
+      parts.push(el('div', { class: 'row', style: 'margin-top:10px' }, replace));
+    }
+    return parts;
+  }
+
+  function encryptSection() {
+    const r = st.ready || {};
+    const item = (ok, text) => updateResult(ok ? 'ok' : 'bad', text);
+    const word = el('input', { type: 'text', placeholder: 'ERASE', autocomplete: 'off' });
+    const go = el('button', { class: 'btn btn-primary', type: 'button', disabled: !(r.key && r.car && r.archived) }, 'Encrypt the drive');
+    go.addEventListener('click', async () => {
+      if (!confirm('Erase the car\'s drive and everything Glovebox keeps on the card, and start again encrypted?')) return;
+      go.disabled = true;
+      await load('POST', '/api/encryption/encrypt', { confirm: word.value.trim() });
+      if (!error) waitForRestart();
+      else go.disabled = false;
+    });
+    return [
+      el('h4', {}, 'Encrypt the drive'),
+      el('div', { class: 'check-steps' },
+        item(r.key, 'Your key is set'),
+        item(r.car, 'The car is paired (Car page)'),
+        item(r.archived, 'Everything is backed up to the NAS')),
+      el('p', {}, el('b', {}, 'This erases the car\'s drive'), ', recent clips included, and everything else Glovebox keeps on the card. ',
+        'The car records again a minute or two later, onto the encrypted drive.'),
+      el('label', { class: 'field', style: 'max-width:220px' }, el('span', { class: 'field-label' }, 'Type ERASE to confirm'), word),
+      el('div', { class: 'row', style: 'margin-top:10px' }, go),
+    ];
+  }
+
+  async function waitForRestart() {
+    box.replaceChildren(el('h3', {}, 'Drive encryption'), updateResult('busy', 'Glovebox is restarting to encrypt the drive. This takes a minute or two…'));
+    const until = Date.now() + 5 * 60 * 1000;
+    while (box.isConnected && Date.now() < until) {
+      await new Promise((res) => setTimeout(res, 4000));
+      try {
+        const now = await api('/api/encryption');
+        if (now.encrypted || now.encrypt_error) { st = now; error = ''; render(); refreshStatus(); return; }
+      } catch { /* restarting */ }
+    }
+    if (box.isConnected) { error = 'Glovebox hasn\'t come back. Reload the page in a minute.'; render(); }
+  }
+
+  function render() {
+    const parts = [el('h3', {}, 'Drive encryption')];
+    if (!st.encrypted) {
+      parts.push(el('p', { class: 'muted' },
+        'Encrypt the footage on the Pi with a key that\'s yours. Clips still play here and in the car, but the card can\'t be read on its own. ',
+        'The drive opens once Glovebox has seen your car over Bluetooth, and stays open until the car cuts the power. ',
+        'Turn off Encrypt Dashcam Recordings in the car (Controls → Safety) so it records plain clips for Glovebox to encrypt.'));
+      if (st.encrypt_requested) parts.push(updateResult('busy', 'Encrypting at the next restart…'));
+      if (st.encrypt_error) parts.push(updateResult('bad', `Encrypting failed: ${st.encrypt_error}`));
+      parts.push(el('h4', {}, 'Your key'), ...keySection(true));
+      if (st.recipient && !replacing) parts.push(...encryptSection());
+    } else {
+      const unlocked = st.state === 'unlocked';
+      parts.push(el('dl', { class: 'kv' },
+        el('dt', {}, 'Drive'), el('dd', {}, unlocked
+          ? `Encrypted, unlocked ${UNLOCKED_BY[st.unlocked_by] || ''}${st.unlocked_at ? ` (${ago(new Date(st.unlocked_at))})` : ''}`
+          : 'Encrypted, locked: waiting for the car'),
+        el('dt', {}, 'Car check'), el('dd', {}, st.car_check === 'audit'
+          ? 'Audit: checked and logged, but the drive opens either way' : 'On: the drive opens only once the car has been seen'),
+        st.check_seconds ? [el('dt', {}, 'Last check took'), el('dd', {}, `${st.check_seconds.toFixed(1)} s`)] : null),
+      el('h4', {}, 'Your key'), ...keySection(unlocked));
+      if (!unlocked) parts.push(el('p', { class: 'muted' }, 'The key can be changed once the drive is unlocked.'));
+    }
+    if (error) parts.push(updateResult('bad', error));
+    box.replaceChildren(...parts);
+  }
+
+  load();
+}
+
 // ---------- setup ----------
 
-function showSetup() {
-  const box = el('div');
-  const upd = el('div', { class: 'panel update' });
-  page('settings', 'Settings', el('div', { class: 'setup-page' },
-    el('div', { class: 'welcome' },
-      el('div', {},
-        el('h2', {}, 'All settings'),
-        el('p', {}, 'Or let the guided setup walk you through Wi-Fi, backups, extra drives and your car, skipping what\'s already set up.')),
+function showSetup(initialTab = 'backups') {
+  const sections = [
+    ['backups', 'Backups', 'Choose where clips go and test the connection.'],
+    ['drives', 'Extra drives', 'Make room for music, light shows, and Boombox sounds.'],
+    ['security', 'Security', 'Manage drive encryption and your recovery key.'],
+    ['updates', 'Updates', 'Review new releases and choose when to install.'],
+  ];
+  const panels = Object.fromEntries(sections.map(([id]) => [id,
+    el('section', { id: 'settings-panel-' + id, role: 'tabpanel', 'aria-labelledby': 'settings-tab-' + id, tabindex: '0', class: 'settings-panel' })]));
+  const save = el('div', { class: 'settings-save' });
+  const tabs = el('div', { class: 'settings-tabs', role: 'tablist', 'aria-label': 'Settings sections' });
+  let selected = sections.some(([id]) => id === initialTab) ? initialTab : 'backups';
+  function select(id, focus = false) {
+    selected = id;
+    for (const button of tabs.children) {
+      const active = button.dataset.section === id;
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+      if (active && focus) button.focus();
+    }
+    for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== id;
+    save.hidden = !['backups', 'drives'].includes(id);
+    // Updating the address without routing keeps all unsaved form controls alive.
+    history.replaceState(null, '', '#/settings/' + id);
+  }
+  sections.forEach(([id, label, description], i) => {
+    const button = el('button', { type: 'button', role: 'tab', id: 'settings-tab-' + id,
+      'data-section': id, 'aria-controls': panels[id].id, title: description }, label);
+    button.addEventListener('click', () => select(id));
+    button.addEventListener('keydown', event => {
+      let next;
+      if (event.key === 'ArrowRight') next = (i + 1) % sections.length;
+      else if (event.key === 'ArrowLeft') next = (i + sections.length - 1) % sections.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = sections.length - 1;
+      else return;
+      event.preventDefault();
+      select(sections[next][0], true);
+    });
+    tabs.append(button);
+  });
+  page('settings', 'Settings', el('div', { class: 'setup-page settings-page' },
+    el('div', { class: 'welcome' }, el('div', {}, el('h2', {}, 'Make it yours.'),
+      el('p', {}, 'Backups, storage, security, and software — each in its own place.')),
       el('a', { class: 'btn', href: '#/welcome' }, 'Guided setup')),
-    box, upd));
-  window.GloveboxSetup.mount(box, { onSaved: refreshStatus });
+    tabs, ...Object.values(panels), save));
+  select(selected);
+  window.GloveboxSetup.mount(panels.backups, {
+    onSaved: refreshStatus,
+    onError: error => { panels.drives.replaceChildren(updateResult('bad', "Couldn’t load drive settings: " + error.message)); },
+    onSections: groups => {
+      panels.backups.replaceChildren(...groups.backups);
+      panels.drives.replaceChildren(...groups.drives);
+      groups.save.querySelector('p').prepend('Saves changes from both Backups and Extra drives. ');
+      save.replaceChildren(groups.save);
+    },
+  });
+  panels.drives.append(loading());
+  const enc = el('div', { class: 'panel update' });
+  const upd = el('div', { class: 'panel update' });
+  panels.security.append(enc);
+  panels.updates.append(el('p', { class: 'settings-hint muted' },
+    'Glovebox checks for new releases automatically while this interface is open. Checks are cached for six hours. Installing an update is always your choice.'), upd);
+  mountEncryption(enc);
   mountUpdate(upd);
 }
 
 // ---------- software update ----------
 
-let updateInfo = null; // the last /api/update answer, for the sidebar
+let updateInfo = null; // the last /api/update answer, shared by all views
+let updateCheckPending = false;
+let updateCheckAttempted = 0;
+let dismissedUpdateVersion = '';
+try { dismissedUpdateVersion = localStorage.getItem('glovebox-dismissed-update') || ''; } catch { /* Storage can be disabled. */ }
+
+function renderUpdateNotice() {
+  const notice = $('#update-notice');
+  const available = updateInfo?.available && updateInfo.latest && updateInfo.state === 'idle'
+    && updateInfo.latest.version !== dismissedUpdateVersion;
+  notice.hidden = !available;
+  notice.replaceChildren(...(available ? [
+    el('div', {}, el('strong', {}, 'Glovebox ' + updateInfo.latest.version + ' is available.'),
+      el('span', {}, ' Review what’s new and update when you’re ready.')),
+    el('a', { class: 'btn update-review', href: '#/settings/updates' }, 'Review update →'),
+    el('button', { type: 'button', class: 'update-dismiss', 'aria-label': 'Dismiss update notification',
+      title: 'Dismiss this release notification', onclick: () => {
+        dismissedUpdateVersion = updateInfo.latest.version;
+        try { localStorage.setItem('glovebox-dismissed-update', dismissedUpdateVersion); } catch { /* Keep it dismissed for this visit. */ }
+        renderUpdateNotice();
+      } }, '×'),
+  ] : []));
+}
+
+async function checkForUpdates() {
+  // Resume checks after an offline/hidden session without flooding a slow device.
+  if (document.hidden || updateCheckPending || Date.now() - updateCheckAttempted < 5 * 60 * 1000) return;
+  updateCheckPending = true;
+  updateCheckAttempted = Date.now();
+  try {
+    updateInfo = await api('/api/update?check=1');
+    renderFoot();
+    renderUpdateNotice();
+  } catch { /* Offline, or this build has no updater: try again later. */ }
+  finally { updateCheckPending = false; }
+}
 
 // notes renders the little Markdown that release notes use: ### headings,
 // - bullets, **bold**, `code` and links (as their text).
@@ -1049,6 +1588,7 @@ function mountUpdate(box) {
     }
     if (u) updateInfo = u;
     renderFoot();
+    renderUpdateNotice();
     if (alive()) render();
   }
 
@@ -1151,19 +1691,28 @@ async function firstRun() {
 
 function route() {
   const [, view, a, b, c] = location.hash.split('/').map(decodeURIComponent);
+  lockedBox = null;
+  // While the encrypted drive is locked there's no footage to show; the
+  // Car and Settings pages still work.
+  if (driveLocked() && !['car', 'settings', 'setup', 'welcome'].includes(view)) return showLockedDrive();
   if (view === 'event' && KIND[a] && b) return showEvent(a, b, c === 'enc');
   if ((view === 'drive' || view === 'recent') && a) return showDrive(a, b === 'enc');
   if (view === 'recent') return showRecent();
   if (KIND[view]) return showEvents(view);
   if (view === 'car') return showCar();
-  if (view === 'settings' || view === 'setup') return showSetup(); // #/setup: before 0.4
+  if (view === 'settings' || view === 'setup') return showSetup(a); // #/setup: before 0.4
   if (view === 'welcome') return showWelcome();
   return showOverview();
 }
 
 window.addEventListener('hashchange', route);
-firstRun().then((moved) => { if (!moved) route(); });
+// the encryption status first, so a locked drive shows at once
+api('/api/encryption').then((e) => { status.encryption = e; }).catch(() => {})
+  .then(firstRun).then((moved) => { if (!moved) route(); });
 refreshStatus();
 setInterval(refreshStatus, 10000);
-// what the last check found, for the sidebar (without asking GitHub again)
-api('/api/update').then((u) => { updateInfo = u; renderFoot(); }).catch(() => {});
+// Ask the existing cached release checker even if Settings is never opened.
+checkForUpdates();
+setInterval(checkForUpdates, 60 * 60 * 1000);
+window.addEventListener('online', checkForUpdates);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdates(); });

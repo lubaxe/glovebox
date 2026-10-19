@@ -287,3 +287,29 @@ func TestOldChargingManagerKeyIsReplaced(t *testing.T) {
 		t.Error("the new key isn't paired yet")
 	}
 }
+
+func TestVerify(t *testing.T) {
+	r := &system.FakeRunner{}
+	c := &Car{Command: "tesla-control", Dir: filepath.Join(t.TempDir(), "ble"), Runner: r}
+	ctx := context.Background()
+	if err := c.SetVIN(testVIN); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Verify(ctx); !errors.Is(err, ErrNotPaired) || len(r.Commands()) != 0 {
+		t.Fatalf("unpaired: err = %v, commands %q", err, r.Commands())
+	}
+	c = newCar(t, r)
+	if err := c.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := "tesla-control -ble -vin " + testVIN + " -key-file " + c.KeyFile() + " -disable-session-cache ping"
+	if cmds := r.Commands(); len(cmds) != 1 || cmds[0] != want {
+		t.Errorf("commands = %q\nwant %q", cmds, want)
+	}
+	r.Handler = func(string) ([]byte, error) {
+		return nil, &system.CmdError{Cmd: "tesla-control", ExitCode: 1, Output: "Error: vehicle rejected request: your public key has not been paired with the vehicle\n"}
+	}
+	if err := c.Verify(ctx); err == nil || !strings.Contains(err.Error(), "not been paired") {
+		t.Errorf("err = %v", err)
+	}
+}

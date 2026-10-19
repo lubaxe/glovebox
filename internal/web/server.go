@@ -42,6 +42,8 @@ type Server struct {
 	WiFi WiFi
 	// Update installs new releases.
 	Update Updater
+	// Encryption is nil when the drive is disabled.
+	Encryption Encryption
 }
 
 // Handler returns the HTTP handler for all routes.
@@ -56,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	s.setupRoutes(mux)
 	s.wifiRoutes(mux)
 	s.updateRoutes(mux)
+	s.encryptionRoutes(mux)
 	ui, err := fs.Sub(uiFiles, "ui")
 	if err != nil {
 		panic(err) // the embedded directory is always there

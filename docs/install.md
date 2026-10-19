@@ -128,6 +128,7 @@ At boot, Glovebox applies the file: Wi-Fi becomes a NetworkManager connection, p
 | Backups don't start | Press **Test the connection** on the Settings page. The NAS must be reachable from the garage (port 445 for SMB, 2049 for NFS, 22 for SSH), or for rclone the home check address. The Overview page and `/backingfiles/glovebox.log` show what happened. |
 | Pairing shows nothing on the car's screen | Nothing appears until you lay the key card on the phone charging pad. The request expires after about 30 seconds, so send it again just before. |
 | Clips show a lock | Your car encrypts its recordings. See [Encrypted clips](how-it-works.md#encrypted-clips). |
+| "The drive is locked" | The drive is encrypted and Glovebox hasn't reached the car over Bluetooth yet; the page shows why. Check that the car is awake and the key is still listed under Controls → Locks → Keys, or unlock with your key. See [Encrypted on the Pi](how-it-works.md#encrypted-on-the-pi). |
 
 ## Uninstalling (after install.sh)
 

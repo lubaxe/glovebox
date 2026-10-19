@@ -1,12 +1,13 @@
 [Unit]
 Description=glovebox dashcam drive service
 # Start as early as possible: until glovebox presents the drive, the car can't
-# record. It needs local filesystems (including /backingfiles), not the
-# network; archiving waits for the NAS by itself.
+# record. It needs local filesystems, not the network; archiving waits for
+# the NAS by itself. A plain /backingfiles is mounted from fstab first
+# (backingfiles.mount); an encrypted one only exists once glovebox has
+# opened it, so glovebox mounts that itself and doesn't require the mount.
 DefaultDependencies=no
-After=local-fs.target systemd-udevd.service
+After=local-fs.target systemd-udevd.service backingfiles.mount
 Wants=local-fs.target
-RequiresMountsFor=/backingfiles
 Before=multi-user.target shutdown.target
 Conflicts=shutdown.target
 

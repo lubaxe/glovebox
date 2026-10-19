@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -101,6 +102,23 @@ func TestBackingfilesExistingPartitionIsMounted(t *testing.T) {
 	cmds := strings.Join(r.Commands(), "\n")
 	if strings.Contains(cmds, "sfdisk") || strings.Contains(cmds, "mkfs") || !strings.Contains(cmds, "mount -t xfs -o noatime /dev/mmcblk0p3") {
 		t.Errorf("commands:\n%s", cmds)
+	}
+}
+
+func TestBackingfilesMountsEncryptedVolume(t *testing.T) {
+	// no partition labelled backingfiles: it's inside the encrypted volume
+	b, r := newBackingfiles(t, &fakeDisk{label: "dos", parts: 3})
+	b.Device = "/dev/mapper/backingfiles"
+	created, err := b.Ensure(context.Background())
+	if err != nil || created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	want := []string{"mountpoint -q " + b.Mountpoint, "mount -t xfs -o noatime /dev/mapper/backingfiles " + b.Mountpoint}
+	if got := r.Commands(); !slices.Equal(got, want) {
+		t.Errorf("commands = %q", got)
+	}
+	if fstab, _ := os.ReadFile(b.Fstab); strings.Contains(string(fstab), "backingfiles") {
+		t.Errorf("fstab = %q", fstab)
 	}
 }
 

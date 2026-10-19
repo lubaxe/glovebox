@@ -14,6 +14,7 @@ import (
 )
 
 func (s *Server) clipRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/telemetry/{snapshot}/{path...}", s.needClips(s.handleTelemetry))
 	mux.HandleFunc("GET /api/events", s.needClips(s.handleEvents))
 	mux.HandleFunc("GET /api/events/{kind}/{id}", s.needClips(s.handleEvent))
 	mux.HandleFunc("GET /api/recent", s.needClips(s.handleRecent))

@@ -106,6 +106,7 @@
       s = await request('GET', '/api/setup');
     } catch (e) {
       root.replaceChildren(h('p', { class: 'result bad' }, `Couldn't load the settings: ${e.message}`));
+      if (opts.onError) opts.onError(e);
       return;
     }
     const a = s.archive;
@@ -308,6 +309,12 @@
         step(next(), 'Extra drives', 'Besides the dashcam drive, the car can get drives with music, a light show and Boombox sounds. Their files are copied from your server, and updated whenever the car gets home. The dashcam drive keeps the rest of the space.',
           drivesBox),
       ];
+    }
+    // The main Settings view reuses these exact controls and one save action.
+    // Keep the guided wizard's ordered/folded presentation unchanged.
+    if (opts.onSections && !opts.fold) {
+      opts.onSections({ backups: middle.slice(0, 2), drives: middle.slice(2), save: saveStep });
+      return;
     }
     saveStep.querySelector('.step-num').textContent = String(next());
     root.replaceChildren(h('div', { class: 'steps setup' },

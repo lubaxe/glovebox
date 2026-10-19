@@ -50,6 +50,16 @@ source = ""            # e.g. "LightShow"
 size = "0"             # e.g. "256M"
 source = ""            # e.g. "Boombox"
 
+[drive.encryption]
+# Once the drive is encrypted (Settings in the web app), it opens only after
+# Glovebox has seen the paired car over Bluetooth, or with your own key.
+# "audit" checks for the car and logs the result, but opens the drive either
+# way: for trying the check without risking the dashcam.
+car_check = "enforce"
+# The partition or image file holding the encrypted drive; empty means the
+# one Glovebox made (labelled glovebox-crypt). For testing.
+device = ""
+
 [snapshots]
 # How often to snapshot the car's drive.
 interval = "58m"
