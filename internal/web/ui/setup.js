@@ -231,6 +231,7 @@
             checkField(true)));
       }
       parts.push(check(a, 'recent', 'Also back up all driving footage (Recent clips, about 15-20 GB per hour of driving)'));
+      parts.push(check(a, 'recent_at_home', 'Also back up Recent clips recorded while the car is home (for a car parked outside; in a garage it\'s just footage of the garage)'));
       parts.push(h('div', { class: 'row', style: 'margin-top:14px' }, testBtn), testOut);
       connBox.replaceChildren(...parts);
       testOut.replaceChildren();

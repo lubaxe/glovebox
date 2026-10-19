@@ -76,7 +76,7 @@ func main() {
 	s := &web.Server{
 		Version: "demo", Status: fakeStatus{}, Log: logger,
 		Drive: fakeDrive{extras: *extras}, Snapshots: snaps, Clips: lib,
-		Archive: fakeArchive{state: *state}, Car: car, KeepAwake: fakeKeepAwake{},
+		Archive: fakeArchive{state: *state}, Car: car, KeepAwake: &fakeKeepAwake{},
 		Setup: demoSetup(*footage),
 	}
 	s.Update = newFakeUpdater(s, *updates == "available")
@@ -297,10 +297,28 @@ func (a fakeArchive) Status() archive.Status {
 }
 func (fakeArchive) Trigger() {}
 
-type fakeKeepAwake struct{}
+// fakeKeepAwake is idle until the Car page's button holds it.
+type fakeKeepAwake struct {
+	mu    sync.Mutex
+	since time.Time
+	until time.Time
+}
 
-func (fakeKeepAwake) Status() keepawake.Status {
+func (k *fakeKeepAwake) Status() keepawake.Status {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if time.Now().Before(k.until) {
+		return keepawake.Status{Active: true, Since: k.since, HeldUntil: k.until,
+			LastWake: time.Now().Add(-40 * time.Second), NextWake: time.Now().Add(20 * time.Second), CarState: "AWAKE",
+			Nudge: "charge port: not allowed for this key; charging current re-set to 32 A"}
+	}
 	return keepawake.Status{LastWake: time.Now().Add(-18 * time.Minute), CarState: "AWAKE"}
+}
+
+func (k *fakeKeepAwake) Hold(d time.Duration) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.since, k.until = time.Now(), time.Now().Add(d)
 }
 
 // demoSetup is a real setup page on a config in dir, with a fake ssh-keygen.

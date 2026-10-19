@@ -24,12 +24,16 @@ type State struct {
 	// (the power was cut mid-upload), with how many times deleting them
 	// has failed
 	partials map[string]int
+	// homeCutoff is the newest Recent clip (car's local time, as
+	// clips.Clip.Start) when the car last got home, plus a margin, or "".
+	homeCutoff string
 }
 
 type stateFile struct {
-	Target   string           `json:"target,omitempty"`
-	Files    map[string]int64 `json:"files"`
-	Partials map[string]int   `json:"partials,omitempty"`
+	Target     string           `json:"target,omitempty"`
+	Files      map[string]int64 `json:"files"`
+	Partials   map[string]int   `json:"partials,omitempty"`
+	HomeCutoff string           `json:"home_cutoff,omitempty"`
 }
 
 // ErrStateReset is returned with an empty State when the state file was
@@ -58,8 +62,25 @@ func LoadState(path string) (*State, error) {
 	if f.Partials != nil {
 		s.partials = f.Partials
 	}
-	s.target = f.Target
+	s.target, s.homeCutoff = f.Target, f.HomeCutoff
 	return s, nil
+}
+
+// HomeCutoff returns the time set by SetHomeCutoff, or "" while away.
+func (s *State) HomeCutoff() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.homeCutoff
+}
+
+// SetHomeCutoff records when (in the car's clock) the car got home; Recent
+// clips after it were recorded at home and aren't archived. "" clears it,
+// when the car has left. It's kept in the state so that a power cut while
+// home doesn't move it.
+func (s *State) SetHomeCutoff(t string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.homeCutoff = t
 }
 
 // Done reports whether rel was archived at size or bigger.
@@ -135,7 +156,7 @@ func (s *State) Count() int {
 // Save writes the state atomically.
 func (s *State) Save() error {
 	s.mu.Lock()
-	b, err := json.Marshal(stateFile{Target: s.target, Files: s.files, Partials: s.partials})
+	b, err := json.Marshal(stateFile{Target: s.target, Files: s.files, Partials: s.partials, HomeCutoff: s.homeCutoff})
 	s.mu.Unlock()
 	if err != nil {
 		return err

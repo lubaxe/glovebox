@@ -92,9 +92,9 @@ type ExtraDriveConfig struct {
 
 // KeepAwakeConfig keeps the car from sleeping, and cutting the Pi's power,
 // while clips are being archived. It talks to the car over Bluetooth with
-// Tesla's tesla-control and a key paired with the car (Charging Manager is
-// enough). Nothing happens until the key is paired, which is done from the
-// web UI's Car page.
+// Tesla's tesla-control and a key paired with the car as Driver. Nothing
+// happens until the key is paired, which is done from the web UI's Car
+// page.
 type KeepAwakeConfig struct {
 	Enabled bool `toml:"enabled"`
 	// VIN is optional: it can also be set on the Car page.
@@ -151,7 +151,7 @@ func Default() Config {
 			Enabled:     true,
 			KeyDir:      "/etc/glovebox/ble",
 			Command:     "tesla-control",
-			Interval:    Duration(2 * time.Minute),
+			Interval:    Duration(time.Minute),
 			MaxDuration: Duration(time.Hour),
 			Cooldown:    Duration(6 * time.Hour),
 		},

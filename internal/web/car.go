@@ -14,21 +14,25 @@ type Car interface {
 	VIN() string
 	SetVIN(vin string) error
 	Paired() (time.Time, bool)
+	Role() string
 	RequestPairing(ctx context.Context) error
 	CheckPairing(ctx context.Context) error
 	Forget() error
 	SleepState(ctx context.Context) (string, error)
 }
 
-// KeepAwake is what the API shows about keep-awake.
+// KeepAwake is what the API shows about keep-awake, and the Car page's
+// button to keep the car awake by hand.
 type KeepAwake interface {
 	Status() keepawake.Status
+	Hold(d time.Duration)
 }
 
 type carResponse struct {
 	VIN       string            `json:"vin"`
 	Paired    bool              `json:"paired"`
 	PairedAt  *time.Time        `json:"paired_at,omitempty"`
+	Role      string            `json:"role"` // the key's, see keepawake.Driver
 	KeepAwake *keepawake.Status `json:"keep_awake,omitempty"`
 }
 
@@ -39,6 +43,7 @@ func (s *Server) carRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/car/check", s.needCar(s.handleCheckPairing))
 	mux.HandleFunc("POST /api/car/forget", s.needCar(s.handleForget))
 	mux.HandleFunc("GET /api/car/state", s.needCar(s.handleCarState))
+	mux.HandleFunc("POST /api/car/keep-awake", s.needCar(s.handleHold))
 }
 
 // needCar also refuses changes that don't come as JSON: a web page on
@@ -58,7 +63,7 @@ func (s *Server) needCar(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleCar(w http.ResponseWriter, r *http.Request) {
-	resp := carResponse{VIN: s.Car.VIN()}
+	resp := carResponse{VIN: s.Car.VIN(), Role: s.Car.Role()}
 	if t, ok := s.Car.Paired(); ok {
 		resp.Paired = true
 		if !t.IsZero() {
@@ -117,6 +122,32 @@ func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
 	if err := s.Car.Forget(); err != nil {
 		s.fail(w, "forgetting the car", err)
 		return
+	}
+	s.handleCar(w, r)
+}
+
+// maxHold is the longest the Car page can keep the car awake for.
+const maxHold = 2 * time.Hour
+
+// handleHold keeps the car awake for the given minutes; 0 stops.
+func (s *Server) handleHold(w http.ResponseWriter, r *http.Request) {
+	if s.KeepAwake == nil {
+		http.Error(w, "keep-awake needs archiving set up", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		Minutes int `json:"minutes"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil || body.Minutes < 0 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	d := min(time.Duration(body.Minutes)*time.Minute, maxHold)
+	s.KeepAwake.Hold(d)
+	if d > 0 {
+		s.Log.Info("keeping the car awake, as asked on the Car page", "for", d)
+	} else {
+		s.Log.Info("stopped keeping the car awake, as asked on the Car page")
 	}
 	s.handleCar(w, r)
 }

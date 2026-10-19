@@ -70,6 +70,24 @@ function gb(bytes) {
   if (bytes < 2 ** 30) return `${Math.max(1, Math.round(bytes / 2 ** 20))} MB`;
   return `${(bytes / 2 ** 30).toFixed(bytes < 10 * 2 ** 30 ? 1 : 0)} GB`;
 }
+// "in 40 s", "in 3 min": how long until date.
+function inTime(date) {
+  const s = Math.max(0, Math.round((date - Date.now()) / 1000));
+  if (s < 60) return `in ${s} s`;
+  return `in ${Math.round(s / 60)} min`;
+}
+
+// One line on what keep-awake is doing while it's active.
+function keepAwakeLine(k) {
+  const parts = [];
+  if (k.since) parts.push(`started ${ago(new Date(k.since))}`);
+  if (k.held_until) parts.push(`as asked, until ${new Date(k.held_until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+  else parts.push('for the backup');
+  if (k.nudging) parts.push('nudging now');
+  else if (k.next_wake) parts.push(new Date(k.next_wake) > Date.now() ? `next nudge ${inTime(new Date(k.next_wake))}` : 'nudging now');
+  return parts.join(' · ');
+}
+
 function ago(date) {
   const s = Math.round((Date.now() - date) / 1000);
   if (s < 60) return 'just now';
@@ -148,6 +166,7 @@ async function refreshStatus() {
   renderChips();
   renderFoot();
   if (current === 'overview') renderOverviewStats();
+  if (current === 'car' && status.car) renderCarStatus(status.car);
 }
 
 function chip(text, state, title, minor) {
@@ -188,6 +207,10 @@ function renderChips() {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); run(); }
   });
   chips.push(nas);
+  const k = status.car?.keep_awake;
+  if (k?.active) {
+    chips.push(el('a', { class: 'chip live', href: '#/car', title: keepAwakeLine(k) }, el('span', { class: 'dot' }), 'Keeping car awake'));
+  }
   const s = status.system?.system;
   if (s?.wifi_signal_dbm != null) chips.push(chip(`Wi-Fi ${s.wifi_signal_dbm} dBm`, s.wifi_signal_dbm < -75 ? 'warn' : '', 'Pi\'s Wi-Fi signal', true));
   $('#chips').replaceChildren(...chips);
@@ -261,11 +284,15 @@ function renderOverviewStats() {
   if (c) {
     if (c.paired) {
       const k = c.keep_awake || {};
-      let sub = 'Ready to keep the car awake while backing up';
-      if (k.active) sub = 'Keeping the car awake for the backup';
-      else if (k.last_error) sub = `Last try: ${k.last_error}`;
-      else if (k.last_wake) sub = `Last kept awake ${ago(new Date(k.last_wake))}`;
-      cards.push(stat(k.last_error ? 'warn' : 'ok', 'bolt', 'Keep-awake', 'Paired', sub, null, '#/car'));
+      if (k.active) {
+        cards.push(stat(k.last_error ? 'warn' : 'live', 'bolt', 'Keep-awake', 'Keeping the car awake',
+          k.last_error ? `Last try failed: ${k.last_error}` : keepAwakeLine(k), null, '#/car'));
+      } else {
+        let sub = 'Ready to keep the car awake while backing up';
+        if (k.last_error) sub = `Last try failed: ${k.last_error}`;
+        else if (k.last_wake) sub = `Last kept awake ${ago(new Date(k.last_wake))}`;
+        cards.push(stat(k.last_error ? 'warn' : 'ok', 'bolt', 'Keep-awake', 'Idle', sub, null, '#/car'));
+      }
     } else {
       cards.push(stat('warn', 'bolt', 'Keep-awake', 'Not paired', 'Pair with your car so backups aren\'t cut short.', null, '#/car'));
     }
@@ -825,6 +852,8 @@ async function showCar() {
   if (current !== 'car') return;
   status.car = car;
   const hasVIN = !!car.vin;
+  // paired before 0.5, with a key that can't keep the car awake
+  const oldKey = car.paired && car.role !== 'driver';
 
   // 1. VIN
   const vin = el('input', { type: 'text', class: 'vin-input', value: car.vin, placeholder: '17 characters', maxlength: 17, autocomplete: 'off', spellcheck: 'false', 'aria-label': 'VIN' });
@@ -837,7 +866,7 @@ async function showCar() {
 
   // 2. pairing request
   const pairOut = el('div');
-  const pairBtn = el('button', { type: 'button', class: car.paired ? '' : 'btn-primary', disabled: !hasVIN }, icon('card'), 'Send pairing request');
+  const pairBtn = el('button', { type: 'button', class: car.paired && !oldKey ? '' : 'btn-primary', disabled: !hasVIN }, icon('card'), 'Send pairing request');
   pairBtn.addEventListener('click', () => runStep(pairBtn, pairOut, 'Talking to the car over Bluetooth…', async () => {
     await send('POST', '/api/car/pair');
     return 'Sent. Now lay your key card on the phone pad and confirm on the car\'s screen.';
@@ -866,7 +895,7 @@ async function showCar() {
         el('ol', {},
           el('li', {}, 'Press ', el('b', {}, 'Send pairing request'), '. Nothing shows on the car\'s screen yet.'),
           el('li', {}, 'Within 30 seconds, lay the ', el('b', {}, 'key card flat on the phone charging pad'), ' beneath the touchscreen (the card reader is underneath) and hold it for a moment.'),
-          el('li', {}, 'The car asks to confirm a new key. Check that it\'s a ', el('b', {}, 'limited key'), ', then accept.')),
+          el('li', {}, 'The car asks you to confirm a new key. Accept it.')),
         padArt(),
         el('div', { class: 'row' }, pairBtn), pairOut)),
     el('div', { class: stepState(car.paired, false, hasVIN) },
@@ -876,11 +905,15 @@ async function showCar() {
         el('p', {}, car.paired
           ? `The car accepted Glovebox's key${car.paired_at ? ` on ${new Date(car.paired_at).toLocaleDateString()}` : ''}. Keep-awake is active.`
           : 'Glovebox asks the car for its charge level using the new key. That only works once the car has accepted it.'),
+        oldKey ? el('p', { class: 'notice-text' }, el('b', {}, 'Pair again: '),
+          'this is an older Charging Manager key, and the car won\'t let it do what keeps it awake, so backups stop after about 12 minutes. ',
+          'Pairing again makes a new key with the Driver role. Then remove the old one under Controls → Locks → Keys.') : null,
         el('div', { class: 'row' }, checkBtn), checkOut)));
 
   // side panel: what the key can do, and the car's state
-  const k = car.keep_awake || {};
   const stateOut = el('div');
+  carStatusBox = el('div');
+  renderCarStatus(car);
   const stateBtn = el('button', { type: 'button', class: 'btn-quiet', disabled: !hasVIN }, icon('refresh'), 'Ask the car');
   stateBtn.addEventListener('click', () => runStep(stateBtn, stateOut, 'Asking the car…', async () => {
     const res = await fetch('/api/car/state');
@@ -898,24 +931,58 @@ async function showCar() {
   const side = el('div', { class: 'side' },
     el('div', { class: 'panel', style: 'margin-top:0' },
       el('h3', { style: 'margin:0 0 4px;font-size:16px' }, 'Why pair?'),
-      el('p', { class: 'muted', style: 'margin:0' }, 'A sleeping car turns off its USB ports, which would cut an upload short. While Glovebox backs up what the car recorded away from home, it tells the car to stay awake, for at most an hour.'),
+      el('p', { class: 'muted', style: 'margin:0' }, 'A sleeping car turns off its USB ports, which would cut an upload short. While Glovebox backs up what the car recorded away from home, it keeps the car awake, for at most an hour. Every minute it:'),
       el('ul', { class: 'can-list' },
-        el('li', { class: 'yes' }, icon('check'), 'Wake the car'),
-        el('li', { class: 'yes' }, icon('check'), 'Read its charge level'),
-        el('li', { class: 'no' }, icon('lock'), 'Unlock or open anything'),
-        el('li', { class: 'no' }, icon('lock'), 'Start or drive the car')),
-      el('p', { class: 'muted', style: 'margin:12px 0 0;font-size:13px' }, 'The key has the Charging Manager role, so the car itself refuses anything else. Remove it any time under Controls → Locks → Keys.')),
+        el('li', { class: 'yes' }, icon('check'), 'Wakes the car'),
+        el('li', { class: 'yes' }, icon('check'), 'Asks it to close the charge port (nothing moves with a cable plugged in)'),
+        el('li', { class: 'yes' }, icon('check'), 'Re-sets its charging current, to the same value')),
+      el('p', { class: 'muted', style: 'margin:12px 0 0;font-size:13px' },
+        'Closing the charge port is what keeps the car awake, and the car only allows it from a key with the ', el('b', {}, 'Driver'), ' role. ',
+        'Glovebox never sends anything else, and the key doesn\'t open the doors as you walk up the way a phone does. ',
+        'But someone who took the Pi could use the key to unlock and drive the car, so turn on ', el('b', {}, 'PIN to Drive'),
+        ' (Controls → Safety). Remove the key any time under Controls → Locks → Keys.')),
     el('div', { class: 'panel', style: 'margin-top:0' },
       el('h3', { style: 'margin:0;font-size:16px' }, 'Status'),
-      el('dl', { class: 'kv' },
-        el('dt', {}, 'VIN'), el('dd', {}, car.vin || '—'),
-        el('dt', {}, 'Key'), el('dd', {}, car.paired ? 'Paired' : 'Not paired'),
-        el('dt', {}, 'Keep-awake'), el('dd', {}, !car.paired ? 'Waiting for pairing' : k.active ? 'Keeping the car awake' : 'Idle'),
-        el('dt', {}, 'Last wake'), el('dd', {}, k.last_wake ? `${ago(new Date(k.last_wake))}${k.car_state ? ` (car ${k.car_state.toLowerCase()})` : ''}` : '—'),
-        k.last_error ? [el('dt', {}, 'Last error'), el('dd', {}, k.last_error)] : null),
+      carStatusBox,
       el('div', { class: 'row', style: 'margin-top:12px' }, stateBtn, forget), stateOut));
 
   page('car', 'Car', el('div', { class: 'car-layout' }, steps, side));
+}
+
+// The Car page's status list and keep-awake button, refreshed with the
+// status every 10 s.
+let carStatusBox = null;
+
+function renderCarStatus(car) {
+  if (!carStatusBox) return;
+  const k = car.keep_awake || {};
+  let holdBtn = null;
+  if (car.paired && car.keep_awake) {
+    holdBtn = k.held_until
+      ? el('button', { type: 'button' }, 'Stop keeping it awake')
+      : el('button', { type: 'button', class: 'btn-primary' }, icon('bolt'), 'Keep awake for 30 min');
+    holdBtn.addEventListener('click', async () => {
+      holdBtn.disabled = true;
+      try {
+        await send('POST', '/api/car/keep-awake', { minutes: k.held_until ? 0 : 30 });
+        status.car = await api('/api/car');
+        renderCarStatus(status.car);
+        renderChips();
+      } catch (e) {
+        holdBtn.disabled = false;
+        alert(e.message);
+      }
+    });
+  }
+  carStatusBox.replaceChildren(
+    el('dl', { class: 'kv' },
+      el('dt', {}, 'VIN'), el('dd', {}, car.vin || '—'),
+      el('dt', {}, 'Key'), el('dd', {}, car.paired ? 'Paired' : 'Not paired'),
+      el('dt', {}, 'Keep-awake'), el('dd', { class: k.active ? 'live-text' : '' }, !car.paired ? 'Waiting for pairing'
+        : k.active ? `Keeping the car awake: ${keepAwakeLine(k)}` : 'Idle'),
+      el('dt', {}, 'Last nudge'), el('dd', {}, k.last_wake ? `${ago(new Date(k.last_wake))}${k.nudge ? `: ${k.nudge}` : ''}` : '—'),
+      k.last_error ? [el('dt', {}, 'Last error'), el('dd', {}, k.last_error)] : null),
+    holdBtn ? el('div', { class: 'row', style: 'margin-top:12px' }, holdBtn) : null);
 }
 
 // ---------- setup ----------

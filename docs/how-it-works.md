@@ -86,7 +86,10 @@ Besides the dashcam drive (`CAM`), the car can get up to three more: `MUSIC`, `L
 
 A sleeping car cuts power to its USB ports, which would stop an upload partway through. Once a key is paired (on the web UI's Car page), Glovebox tells the car to stay awake over Bluetooth while it uploads what the car recorded away from home, using Tesla's [`tesla-control`](https://github.com/teslamotors/vehicle-command) (included in the image).
 
-- The key is paired with the **Charging Manager** role. Tested on a 2026 Model 3: it can wake the car and read its charge state, but the car refuses unlock, remote start, flashing the lights and opening the charge port.
+- Every `keep_awake.interval` (1 minute) it wakes the car and nudges it: it asks it to close the charge port (what teslausb and Sentry-USB do; with a cable plugged in the car refuses, which still counts), then sets the charging current to the value it already has. Tested on a 2026 Model 3, the charge port is what does it: waking the car, reading its state, re-setting the charging current and Keep Accessory Power On (which doesn't power the glovebox port) all left the car cutting the USB power about 12 minutes after it woke.
+- So the key is paired with the **Driver** role: the car refuses to close the charge port for Charging Manager and Fleet Manager keys. Glovebox sends nothing but those commands, and a key used from the command line doesn't do passive entry like a phone. But the key could unlock and drive the car if someone took it from the Pi, so turn on PIN to Drive. A Charging Manager key paired by Glovebox before 0.5 is replaced with a new Driver key when you pair again (the Car page asks you to); remove the old one in the car.
+- Recent clips recorded while the car is home aren't archived (`archive.recent_at_home = false`): when the car gets home, Glovebox notes the newest Recent clip (by the car's own clock) and skips later ones until the car has been gone for 2 minutes. An awake car in a garage records the garage, and each upload would leave more for the next. Turn it on for a car parked outside.
+- The Car page also has a **Keep awake for 30 min** button, and the web UI shows when the car is being kept awake. With `[log] level = "debug"` every Bluetooth command is logged with how long it took.
 - Only the first upload after the car gets home keeps it awake. An awake car keeps recording, faster than the Wi-Fi can upload, so what it records while parked is uploaded whenever it happens to be awake but never holds it awake.
 - It's also kept awake while a software update installs, so the Pi doesn't lose power partway through.
 - As a backstop, the car is kept awake for at most `keep_awake.max_duration` (1 hour) at a time, then left alone for `keep_awake.cooldown` (6 hours).
@@ -95,7 +98,8 @@ A sleeping car cuts power to its USB ports, which would stop an upload partway t
 Pairing from the command line instead of the web UI:
 
 ```sh
-sudo tesla-control -ble -vin <VIN> add-key-request /etc/glovebox/ble/public.pem charging_manager cloud_key
+sudo tesla-control -ble -vin <VIN> add-key-request /etc/glovebox/ble/public.pem driver cloud_key
+echo driver | sudo tee /etc/glovebox/ble/role
 # lay a key card on the phone charging pad and confirm on the car's screen, then:
 sudo tesla-control -ble -vin <VIN> -key-file /etc/glovebox/ble/private.pem wake
 ```

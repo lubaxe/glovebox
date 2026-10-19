@@ -85,6 +85,7 @@ type Archive struct {
 	Type         string `json:"type"`
 	CheckAddress string `json:"check_address"`
 	Recent       bool   `json:"recent"`
+	RecentAtHome bool   `json:"recent_at_home"`
 	SMB          SMB    `json:"smb"`
 	NFS          NFS    `json:"nfs"`
 	Rsync        Rsync  `json:"rsync"`
@@ -125,7 +126,7 @@ func (s *Setup) Get() (Settings, error) {
 	}
 	a := cfg.Archive
 	out := Settings{Archive: Archive{
-		Enabled: a.Enabled, Type: a.Type, CheckAddress: a.CheckAddress, Recent: a.Recent,
+		Enabled: a.Enabled, Type: a.Type, CheckAddress: a.CheckAddress, Recent: a.Recent, RecentAtHome: a.RecentAtHome,
 		SMB: SMB{Server: a.SMB.Server, Share: a.SMB.Share, Folder: a.SMB.Folder, Version: a.SMB.Version},
 		NFS: NFS{Server: a.NFS.Server, Export: a.NFS.Export, Folder: a.NFS.Folder},
 		Rsync: Rsync{Server: a.Rsync.Server, Port: a.Rsync.Port, User: a.Rsync.User, Path: a.Rsync.Path,
@@ -154,6 +155,7 @@ func apply(cfg *config.Config, in Settings) (user, password string, err error) {
 	a := &cfg.Archive
 	p := in.Archive
 	a.Enabled, a.Type, a.CheckAddress, a.Recent = p.Enabled, p.Type, strings.TrimSpace(p.CheckAddress), p.Recent
+	a.RecentAtHome = p.RecentAtHome
 	a.SMB.Server, a.SMB.Share, a.SMB.Folder, a.SMB.Version = trim(p.SMB.Server), trim(p.SMB.Share), strings.Trim(trim(p.SMB.Folder), "/"), p.SMB.Version
 	a.NFS.Server, a.NFS.Export, a.NFS.Folder = trim(p.NFS.Server), trim(p.NFS.Export), strings.Trim(trim(p.NFS.Folder), "/")
 	a.Rsync.Server, a.Rsync.User, a.Rsync.Path = trim(p.Rsync.Server), trim(p.Rsync.User), trim(p.Rsync.Path)

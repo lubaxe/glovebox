@@ -238,6 +238,45 @@ func TestRecentClipsOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestRecentClipsRecordedAtHomeAreSkipped(t *testing.T) {
+	snaps := &snapSet{}
+	snaps.add(t, "snap-000001", map[string]int{
+		"TeslaCam/RecentClips/2026-10-15_12-59-00-front.mp4": clipSize,
+		"TeslaCam/RecentClips/2026-10-15_13-00-00-front.mp4": clipSize, // being recorded on arrival
+	})
+	a, target := newArchiver(t, snaps)
+	a.Sentry, a.Saved, a.Recent = false, false, true
+	a.run(context.Background())
+	if len(target.uploads) != 2 || a.State.HomeCutoff() != "2026-10-15T13:01:00" {
+		t.Fatalf("uploads = %v, cutoff = %q", target.uploads, a.State.HomeCutoff())
+	}
+
+	// the car stays awake in the garage and keeps recording
+	snaps.add(t, "snap-000002", map[string]int{
+		"TeslaCam/RecentClips/2026-10-15_13-01-00-front.mp4": clipSize, // pulling in
+		"TeslaCam/RecentClips/2026-10-15_13-05-00-front.mp4": clipSize, // the garage
+	})
+	target.uploads = nil
+	a.run(context.Background())
+	if strings.Join(target.uploads, " ") != "RecentClips/2026-10-15_13-01-00-front.mp4" {
+		t.Errorf("uploads = %v", target.uploads)
+	}
+
+	// a power cut while home doesn't move the cutoff
+	st, err := LoadState(a.State.path)
+	if err != nil || st.HomeCutoff() != "2026-10-15T13:01:00" {
+		t.Fatalf("reloaded cutoff = %q, %v", st.HomeCutoff(), err)
+	}
+
+	// after the car left, the next arrival takes what was recorded since
+	a.State.SetHomeCutoff("")
+	target.uploads = nil
+	a.run(context.Background())
+	if strings.Join(target.uploads, " ") != "RecentClips/2026-10-15_13-05-00-front.mp4" {
+		t.Errorf("after leaving: uploads = %v", target.uploads)
+	}
+}
+
 func TestLoopArchivesWhenHome(t *testing.T) {
 	snaps := &snapSet{}
 	snaps.add(t, "snap-000001", standardDrive)

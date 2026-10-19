@@ -36,7 +36,8 @@ Glovebox plugs into your Tesla's USB port and becomes its dashcam drive. Your ca
 
 - **Set up from your phone.** Flash the card and plug it in. Glovebox opens its own Wi-Fi network with a setup wizard: your home Wi-Fi, where backups go (with a connection test), extra drives and your car. No files to edit. Run the wizard again whenever you want to change something; it skips what's already set up.
 - **Automatic backup when you get home.** Glovebox notices your NAS, copies what's new (Sentry first, then saved clips, newest first) and picks up where it left off if the car drives away mid-copy. It backs up to an SMB share, an NFS export, a server with rsync over SSH, or any of the 70-odd storage services rclone supports.
-- **Keeps the car awake until the backup is done.** A sleeping Tesla cuts USB power. Glovebox pairs with your car over Bluetooth using a *limited* key that can wake it, but can't unlock, open or drive it.
+- **Keeps the car awake until the backup is done.** A sleeping Tesla cuts USB power. Glovebox pairs with your car over Bluetooth and, while it backs up, nudges it every minute to stay awake, for at most an hour.
+- **Doesn't back up your garage.** Footage the car records while parked at home after the drive isn't uploaded, so a long backup doesn't leave more to upload next time. (Parked outside? Turn it on in Settings.)
 - **Never gets in the car's way.** The car's drive is never touched while the car is using it. Glovebox reads footage from instant copy-on-write snapshots, repairs those instead, and presents the drive to the car about 16 seconds after power-on.
 - **Bigger dashcam drive, more history.** The car gets nearly the whole card (52 GB on a 64 GB card), and snapshots keep clips the car has already overwritten.
 - **Music, light shows and Boombox.** Optional extra drives for the car, filled from folders on your NAS and updated whenever you get home. Only a drive that changed is swapped, so the dashcam keeps recording.
@@ -138,7 +139,7 @@ How: the image is built from Raspberry Pi's own build system, keeping only its b
 
 ## Is it safe?
 
-- **For your car:** the Bluetooth key has Tesla's **Charging Manager** role. We tested it: the car lets it wake up and read the charge level, and refuses unlocking, remote start, flashing the lights and opening the charge port. You can remove it any time under Controls → Locks → Keys.
+- **For your car:** keeping the car awake needs a Bluetooth key with Tesla's **Driver** role: the car only lets a Driver key close the charge port, which is what keeps it awake (we tested the more limited roles; they can't). Glovebox only ever sends wake, close-the-charge-port and charging-current commands, and the key doesn't open the doors as you walk up the way a phone does. But someone who took the Pi could use the key to unlock and drive the car, so **turn on PIN to Drive** (Controls → Safety), and remove the key under Controls → Locks → Keys if the Pi is ever lost.
 - **For your footage:** the car's drive is never written to while the car can see it. Glovebox only ever deletes events from the car's drive once they're on your NAS at full size, and only at startup, before the car is connected.
 - **For your privacy:** with a NAS, footage goes from the car to your NAS and never leaves your home network. Only if you pick a cloud drive (through rclone) does it go there, and nowhere else. Glovebox itself never contacts any other server; the Pi only sets its clock from a public time server.
 - **The setup network** is open, so anyone nearby could join it while it's on. It's only on until Glovebox is set up, before there's any footage, and turns off for good once you finish the wizard (at most 30 minutes after the Pi first joins your Wi-Fi).

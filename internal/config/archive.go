@@ -33,6 +33,10 @@ type ArchiveConfig struct {
 	Sentry bool `toml:"sentry"`
 	Saved  bool `toml:"saved"`
 	Recent bool `toml:"recent"`
+	// RecentAtHome also archives Recent clips recorded while the car is
+	// home. Off, an awake car in a garage would fill the target with the
+	// garage; on, for a car parked outside.
+	RecentAtHome bool `toml:"recent_at_home"`
 
 	// HomeDelay is how long the target must be reachable before archiving.
 	HomeDelay Duration `toml:"home_delay"`

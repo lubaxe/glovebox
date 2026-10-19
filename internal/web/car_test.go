@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lubaxe/glovebox/internal/keepawake"
 	"github.com/lubaxe/glovebox/internal/system"
@@ -90,5 +91,31 @@ func TestCarAPIWhenOff(t *testing.T) {
 	defer ts.Close()
 	if resp := do(t, "GET", ts.URL+"/api/car"); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status %d", resp.StatusCode)
+	}
+}
+
+type fakeHold struct{ d time.Duration }
+
+func (f *fakeHold) Status() keepawake.Status { return keepawake.Status{HeldUntil: time.Now().Add(f.d)} }
+func (f *fakeHold) Hold(d time.Duration)     { f.d = d }
+
+func TestKeepAwakeHold(t *testing.T) {
+	car := &keepawake.Car{Command: "tesla-control", Dir: filepath.Join(t.TempDir(), "ble"), Runner: &system.FakeRunner{}}
+	k := &fakeHold{}
+	s := &Server{Version: "test", Status: fakeStatus{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Car: car, KeepAwake: k}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	if resp := sendJSON(t, "POST", ts.URL+"/api/car/keep-awake", `{"minutes":30}`); resp.StatusCode != http.StatusOK || k.d != 30*time.Minute {
+		t.Errorf("hold: status %d, %v", resp.StatusCode, k.d)
+	}
+	if sendJSON(t, "POST", ts.URL+"/api/car/keep-awake", `{"minutes":600}`); k.d != maxHold {
+		t.Errorf("hold is capped at %v, got %v", maxHold, k.d)
+	}
+	if sendJSON(t, "POST", ts.URL+"/api/car/keep-awake", `{"minutes":0}`); k.d != 0 {
+		t.Errorf("stop: %v", k.d)
+	}
+	if resp := sendJSON(t, "POST", ts.URL+"/api/car/keep-awake", `{"minutes":-1}`); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("negative: status %d", resp.StatusCode)
 	}
 }

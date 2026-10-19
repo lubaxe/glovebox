@@ -164,7 +164,7 @@ func run() error {
 			if cfg.KeepAwake.Enabled {
 				car = &keepawake.Car{
 					Command: cfg.KeepAwake.Command, Dir: cfg.KeepAwake.KeyDir, ConfigVIN: cfg.KeepAwake.VIN,
-					Runner: system.Exec{Log: log},
+					Runner: system.Exec{Log: log}, Log: log,
 				}
 				api.Car = car
 			}
@@ -271,6 +271,7 @@ func newArchiver(cfg config.Config, lib *clips.Library, d *drive.Drive, st *arch
 	}
 	a := archive.New(target, lib, d, st, log)
 	a.Sentry, a.Saved, a.Recent = cfg.Archive.Sentry, cfg.Archive.Saved, cfg.Archive.Recent
+	a.RecentAtHome = cfg.Archive.RecentAtHome
 	a.HomeDelay = time.Duration(cfg.Archive.HomeDelay)
 	a.CheckInterval = time.Duration(cfg.Archive.CheckInterval)
 	a.RescanInterval = time.Duration(cfg.Archive.RescanInterval)

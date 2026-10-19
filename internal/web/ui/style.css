@@ -207,6 +207,15 @@ main { padding: 28px 32px 60px; max-width: 1440px; }
 .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .chip.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
 .chip.warn .dot { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.chip.live { text-decoration: none; color: inherit; }
+.chip.live .dot { background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
+@keyframes live-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .chip.live .dot { animation: none; } }
+.live-text { color: var(--accent); font-weight: 600; }
+.notice-text { border-left: 3px solid var(--warn); padding: 6px 0 6px 12px; }
 .chip.bad .dot { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent); }
 .chip.clickable { cursor: pointer; }
 .chip.clickable:hover { color: var(--text); border-color: var(--border); }
@@ -261,6 +270,8 @@ a.stat:hover { border-color: var(--border); }
 .stat.ok .stat-icon { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .stat.warn .stat-icon { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .stat.bad .stat-icon { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.stat.live .stat-icon { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.stat.live { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .stat.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
 .stat.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
 .stat-value { font-size: 21px; font-weight: 700; letter-spacing: -.025em; line-height: 1.2; }

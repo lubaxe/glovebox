@@ -44,6 +44,8 @@
 # enabled = true
 # recent = false                         # true: also back up all driving
 #                                        # footage (15-20 GB per hour on HW4)
+# recent_at_home = false                 # true: also Recent clips recorded
+#                                        # at home (a car parked outside)
 
 [archive.smb]
 # server = "192.168.1.10"                # the NAS's address

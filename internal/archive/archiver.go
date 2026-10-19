@@ -6,6 +6,8 @@
 // newest first, so the most important footage gets out before the car goes
 // to sleep and cuts the Pi's power. While home it checks again every
 // RescanInterval, so Sentry events recorded in the garage get archived too.
+// Recent clips recorded at home aren't: an awake car records the garage all
+// the time, and each upload would leave more of it for the next.
 package archive
 
 import (
@@ -82,6 +84,8 @@ type Archiver struct {
 	Log       *slog.Logger
 
 	Sentry, Saved, Recent bool
+	// RecentAtHome also archives Recent clips recorded while home.
+	RecentAtHome bool
 
 	HomeDelay      time.Duration
 	CheckInterval  time.Duration
@@ -134,7 +138,7 @@ func (a *Archiver) Run(ctx context.Context) {
 	home := false
 	catchUp := false
 	syncDrives := false
-	var lastRun time.Time
+	var lastRun, awaySince time.Time
 	for {
 		triggered := false
 		if err := a.Target.Reachable(ctx); err != nil {
@@ -143,7 +147,18 @@ func (a *Archiver) Run(ctx context.Context) {
 			}
 			home = false
 			a.setState(Away)
+			if awaySince.IsZero() {
+				awaySince = time.Now()
+			}
+			// gone for a while, not a Wi-Fi blip: next time home is a new arrival
+			if time.Since(awaySince) >= leftHomeAfter && a.State.HomeCutoff() != "" {
+				a.State.SetHomeCutoff("")
+				if err := a.State.Save(); err != nil {
+					a.Log.Error("saving archive state", "err", err)
+				}
+			}
 		} else {
+			awaySince = time.Time{}
 			if !home {
 				a.Log.Info("archive target reachable, car is home", "target", a.Target)
 				home = true
@@ -191,6 +206,40 @@ type item struct {
 	event                  string // kind/id, for the summary
 }
 
+// leftHomeAfter is how long the target must be unreachable before the car
+// counts as having left home.
+const leftHomeAfter = 2 * time.Minute
+
+// homeMargin is added to the newest Recent clip when the car gets home: the
+// clip being recorded then, and pulling in, still count as the drive.
+const homeMargin = time.Minute
+
+// clipTime is clips.Clip.Start's layout.
+const clipTime = "2006-01-02T15:04:05"
+
+// setHomeCutoff records, the first time the car is home after being away,
+// the newest Recent clip on the drive; clips after it are recorded at home.
+// It goes by the clips' own timestamps, so the car's clock and time zone
+// don't matter.
+func (a *Archiver) setHomeCutoff() {
+	if a.State.HomeCutoff() != "" {
+		return
+	}
+	cutoff := "0" // no Recent clips: everything from now on is at home
+	for _, c := range a.Library.Recent() {
+		if t, err := time.Parse(clipTime, c.Start); err == nil {
+			if s := t.Add(homeMargin).Format(clipTime); s > cutoff {
+				cutoff = s
+			}
+		}
+	}
+	a.State.SetHomeCutoff(cutoff)
+	if err := a.State.Save(); err != nil {
+		a.Log.Error("saving archive state", "err", err)
+	}
+	a.Log.Info("car is home; Recent clips recorded after this aren't archived", "after", cutoff)
+}
+
 func (a *Archiver) run(ctx context.Context) {
 	res := Result{Started: time.Now()}
 	defer func() {
@@ -216,6 +265,9 @@ func (a *Archiver) run(ctx context.Context) {
 		res.Err = err.Error()
 		a.Log.Error("listing snapshots", "err", err)
 		return
+	}
+	if !a.RecentAtHome {
+		a.setHomeCutoff()
 	}
 	all := a.queue()
 	keep := map[string]bool{}
@@ -363,7 +415,11 @@ func (a *Archiver) queue() []item {
 		}
 	}
 	if a.Recent {
+		cutoff := a.State.HomeCutoff()
 		for _, c := range a.Library.Recent() {
+			if !a.RecentAtHome && cutoff != "" && c.Start > cutoff {
+				continue // recorded at home
+			}
 			for _, cam := range clips.SortCameras(cameraSet(c)) {
 				out = append(out, newItem(c.Cameras[cam], ""))
 			}
