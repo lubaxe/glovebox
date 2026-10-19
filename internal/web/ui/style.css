@@ -878,4 +878,6 @@ input, select { font-size: 14px; }
  .cinema-viewer .cams.viewer-grid { grid-template-columns: repeat(var(--camera-mobile-columns,2),minmax(0,1fr)); grid-template-rows: repeat(var(--camera-mobile-rows,3),minmax(0,1fr)); }
  .viewer-details { top: 52px; max-height: calc(100% - 160px); }
 }
+/* a phone: the time is shown top left, and the controls need the room */
+@media(max-width: 420px) { .cinema-viewer .clock { display: none; } }
 @media(max-height: 480px) and (min-width: 600px) { .viewer-hud { top: 8px; } .viewer-rail { flex-basis: 74px; } .camera-choice { height: 60px; } .cinema-viewer .controls input[type=range] { order: initial; flex-basis: auto; } }

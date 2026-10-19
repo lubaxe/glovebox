@@ -187,3 +187,12 @@ func TestZipDownloads(t *testing.T) {
 		t.Errorf("empty range: status %d", resp.StatusCode)
 	}
 }
+
+func TestMediaKeyframesNeedAnIndex(t *testing.T) {
+	ts := clipServer(t)
+	// the test clip has no sample tables: nothing to pick keyframes from
+	resp := do(t, "GET", ts.URL+"/media/snap-000001/"+sentryDir+"/2026-10-15_00-39-00-front.mp4?keyframes=1")
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}

@@ -6,6 +6,14 @@ Opening an unencrypted event or drive enters the cinema viewer. Use the thumbnai
 
 The top controls open clip details, enter/exit fullscreen where supported, download the selected camera's current minute, and close the viewer. Close restores the normal desktop/sidebar or mobile bottom navigation. The details panel contains event information, minute selection and all downloads. Space plays/pauses, left/right arrows seek five seconds, and Escape closes details or the viewer (the browser handles Escape from native fullscreen).
 
+## Low data
+
+The Pi's Wi-Fi carries about 25 Mbit/s, and a minute of HW4 footage needs about 43 for all six cameras (the front alone about 10). So in Full quality only the camera on screen streams; the others keep the frame they loaded, and the grid streams all six and can stall.
+
+**Low data** (next to the speed menu; the browser remembers it) plays every camera's keyframes only. Tesla's cameras write one every half second, so that's 2 frames a second at full resolution, about a fifth of the bytes: roughly 2 Mbit/s for the front camera and 1.1 for each of the others, 7.5 for all six. Every camera plays, in the grid and in the thumbnails, and the next minute buffers for all of them.
+
+The server builds these copies as they're read (`/media/...?keyframes=1`): a new index listing only the keyframes, each lasting until the next, followed by the keyframes' bytes read straight from the clip. Nothing is decoded or re-encoded and nothing is stored, so it starts at once and costs the Pi almost nothing. Each keyframe keeps its decode time, so Low data stays in step with the telemetry and with Full quality, and switching keeps the position. A clip the car was still writing when it was snapshotted has no index yet and can't be shown this way.
+
 ## Recorded overlay
 
 The HUD displays gear, speed, steering-wheel angle, accelerator pedal percentage, brake state, left/right turn signals and the recorded assistance mode (Manual, FSD, Autosteer or TACC). Click the speed unit to switch MPH / km/h; the browser remembers the choice when storage is available. The accelerator is the recorded pedal position, not motor power or the vehicle controller's torque request. In an FSD recording the physical accelerator can remain at zero while the car moves.

@@ -9,6 +9,9 @@
 // right_repeater.mp4, left_pillar.mp4, right_pillar.mp4) and a thumb.png in
 // <footage>/videos first; thumb-1.png, thumb-2.png... give events their own
 // thumbnails.
+//
+// -bandwidth 25 limits what the demo serves to 25 Mbit/s, like the Pi's
+// Wi-Fi, and logs what the viewer fetches, to try the low-bandwidth mode.
 package main
 
 import (
@@ -53,6 +56,7 @@ func main() {
 	setupDone := flag.Bool("setupdone", false, "start as a Pi on home Wi-Fi with setup finished, for Guided setup")
 	updates := flag.String("update", "available", `software update to show: "available" or "current"`)
 	realClip := flag.String("real-clip", "", "optional local unencrypted front MP4, copied only into the isolated demo snapshot")
+	bandwidth := flag.Float64("bandwidth", 0, "serve at most this many Mbit/s, like the Pi's Wi-Fi (0: no limit)")
 	flag.Parse()
 
 	videos := filepath.Join(*footage, "videos")
@@ -99,7 +103,76 @@ func main() {
 		s.WiFi = &fakeWiFi{done: true, joined: &wifi.JoinResult{SSID: "Springfield Home", OK: true, Address: "192.168.1.50", At: time.Now()}}
 	}
 	log.Printf("serving the demo UI on http://%s", *addr)
-	log.Fatal(http.ListenAndServe(*addr, s.Handler()))
+	log.Fatal(http.ListenAndServe(*addr, limit(s.Handler(), *bandwidth)))
+}
+
+// limit serves at most mbps Mbit/s across all requests, and logs the rate
+// video is fetched at every 10 seconds.
+func limit(h http.Handler, mbps float64) http.Handler {
+	t := &throttle{bytesPerSec: mbps * 1e6 / 8}
+	go func() {
+		for range time.Tick(10 * time.Second) {
+			t.mu.Lock()
+			n := t.video
+			t.video = 0
+			t.mu.Unlock()
+			if n > 0 {
+				log.Printf("video served: %.2f Mbit/s", float64(n)*8/10/1e6)
+			}
+		}
+	}()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		video := strings.HasPrefix(r.URL.Path, "/media/") || strings.HasPrefix(r.URL.Path, "/preview/")
+		h.ServeHTTP(&throttledWriter{ResponseWriter: w, t: t, video: video}, r)
+	})
+}
+
+type throttle struct {
+	mu          sync.Mutex
+	bytesPerSec float64
+	next        time.Time
+	video       int64
+}
+
+// wait blocks until n more bytes fit in the bandwidth.
+func (t *throttle) wait(n int, video bool) {
+	t.mu.Lock()
+	if video {
+		t.video += int64(n)
+	}
+	if t.bytesPerSec <= 0 {
+		t.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	if t.next.Before(now) {
+		t.next = now
+	}
+	t.next = t.next.Add(time.Duration(float64(n) / t.bytesPerSec * float64(time.Second)))
+	until := t.next
+	t.mu.Unlock()
+	time.Sleep(time.Until(until))
+}
+
+type throttledWriter struct {
+	http.ResponseWriter
+	t     *throttle
+	video bool
+}
+
+func (w *throttledWriter) Write(p []byte) (int, error) {
+	written := 0
+	for len(p) > 0 {
+		n := min(len(p), 16<<10)
+		w.t.wait(n, w.video)
+		k, err := w.ResponseWriter.Write(p[:n])
+		written += k
+		if err != nil {
+			return written, err
+		}
+		p = p[n:]
+	}
+	return written, nil
 }
 
 // makeVideos makes a short sample video per camera, and a thumbnail.

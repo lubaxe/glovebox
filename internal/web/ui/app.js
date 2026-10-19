@@ -54,6 +54,10 @@ function mediaURL(file, download) {
   return `/media/${encodeURIComponent(file.snapshot)}/${p}?layout=${MEDIA_LAYOUT}${download ? '&download=1' : ''}`;
 }
 
+// A clip's keyframes only: 2 frames a second at full resolution, about a
+// fifth of the bytes.
+const keyframesURL = (file) => mediaURL(file) + '&keyframes=1';
+
 const telemetryURL = (file) => '/api/telemetry/' + encodeURIComponent(file.snapshot) + '/' + file.path.split('/').map(encodeURIComponent).join('/');
 
 // Stops a video's download and frees its decoder.
@@ -575,6 +579,11 @@ const player = {
     this.zipURL = zipURL;
     this.speedUnit = 'mph';
     try { this.speedUnit = localStorage.getItem('glovebox-speed-unit') === 'kmh' ? 'kmh' : 'mph'; } catch { /* Optional preference. */ }
+    // Low bandwidth plays every camera's keyframes only: all six come to
+    // about 7.5 Mbit/s, which the Pi's Wi-Fi carries, against about 43 for
+    // the full clips.
+    this.lowBandwidth = false;
+    try { this.lowBandwidth = localStorage.getItem('glovebox-low-bandwidth') === '1'; } catch { /* Optional preference. */ }
 
     const set = new Set();
     for (const c of clips) for (const cam of Object.keys(c.cameras)) set.add(cam);
@@ -593,7 +602,7 @@ const player = {
       v.muted = true;
       v.addEventListener('timeupdate', () => this.onTime(v));
       v.addEventListener('ended', () => this.onEnded(v));
-      v.addEventListener('loadedmetadata', () => { v.playbackRate = this.speed; });
+      v.addEventListener('loadedmetadata', () => { v.playbackRate = this.speed; this.fitDuration(v); });
       v.addEventListener('loadeddata', () => {
         if (this.videos[cam] !== v) return;
         this.showFrame(v);
@@ -635,6 +644,9 @@ const player = {
     $('#play').addEventListener('click', () => (this.playing ? this.pause() : this.play()));
     $('#prev').addEventListener('click', () => this.i > 0 && this.load(this.i - 1, this.playing));
     $('#next').addEventListener('click', () => this.i + 1 < this.clips.length && this.load(this.i + 1, this.playing));
+    const quality = $('#quality');
+    quality.value = this.lowBandwidth ? 'low' : 'full';
+    quality.addEventListener('change', () => this.setLowBandwidth(quality.value === 'low'));
     $('#speed').value = String(this.speed);
     $('#speed').addEventListener('change', (e) => {
       this.speed = Number(e.target.value);
@@ -677,7 +689,7 @@ const player = {
         unload(old);
       } else {
         old.pause();
-        if (file) old.src = mediaURL(file);
+        if (file) old.src = this.source(file);
         else unload(old);
         unload(this.spares[cam]);
       }
@@ -709,10 +721,13 @@ const player = {
   // grid. All six at once need about 43 Mbit/s, more than the Pi's Wi-Fi
   // gives; Safari then never starts playing. The others keep the frame they
   // loaded, for the thumbnails.
+  //
+  // In low bandwidth every camera streams, the one on screen first.
   active() {
     const loaded = this.cams.map((c) => this.videos[c]).filter((v) => v?.getAttribute('src'));
     if (this.selectedCamera === 'grid') return loaded;
     const main = this.videos[this.selectedCamera];
+    if (this.lowBandwidth) return main?.getAttribute('src') ? [main, ...loaded.filter((v) => v !== main)] : loaded;
     return main?.getAttribute('src') ? [main] : loaded.slice(0, 1);
   },
 
@@ -774,6 +789,7 @@ const player = {
   // refills its decoder, so it's only for big jumps or while paused.
   onTime(v) {
     if (v !== this.master) return;
+    this.fitDuration(v);
     for (const other of this.active()) {
       if (other === v || other.readyState < 2) continue;
       const drift = other.currentTime - v.currentTime;
@@ -801,7 +817,8 @@ const player = {
   // Starts the next minute buffering in the spares 20 seconds before this
   // one ends. Only the master buffers it all: on the Pi's Wi-Fi, the other
   // cameras' next minute would take bandwidth from this one, so they fetch
-  // just the index and start loading when they're swapped in.
+  // just the index and start loading when they're swapped in. Keyframes
+  // are small enough for every camera to buffer.
   prepareNext() {
     const k = this.i + 1;
     if (this.prepared === k || k >= this.clips.length) return;
@@ -809,8 +826,8 @@ const player = {
     const clip = this.clips[k];
     for (const cam of this.cams) {
       const v = this.spares[cam], file = clip.cameras[cam];
-      v.preload = this.videos[cam] === this.master ? 'auto' : 'metadata';
-      if (file) v.src = mediaURL(file);
+      v.preload = this.lowBandwidth || this.videos[cam] === this.master ? 'auto' : 'metadata';
+      if (file) v.src = this.source(file);
       else unload(v);
     }
     this.prefetchTelemetry(clip);
@@ -835,6 +852,19 @@ const player = {
       v.currentTime = this.master && this.master !== v ? this.master.currentTime : at;
       if (this.playing && this.active().includes(v)) v.play().catch(() => {});
     }, { once: true });
+  },
+
+  // The timeline first assumes a drive's last minute is a whole one, but
+  // it usually ends early, where the car was parked: once the master has
+  // loaded it, the timeline ends where it does, instead of playback
+  // stopping short of the end.
+  fitDuration(v) {
+    const last = this.clips.length - 1;
+    if (v !== this.master || this.i !== last || !Number.isFinite(v.duration) || !v.duration) return;
+    const duration = this.offsets[last] + v.duration;
+    if (Math.abs(duration - this.duration) < 0.05) return;
+    this.duration = duration;
+    $('#scrub').max = duration;
   },
 
   // Position in the recording, in seconds of real time from its first clip.
@@ -1036,6 +1066,24 @@ const player = {
     link.setAttribute('aria-disabled', String(!file));
     link.setAttribute('aria-label', 'Download ' + (CAMERA_NAMES[camera] || camera) + ' camera');
     link.title = file ? 'Download ' + (CAMERA_NAMES[camera] || camera) + ' camera' : 'Camera was not recorded in this minute';
+  },
+
+  source(file) {
+    return this.lowBandwidth ? keyframesURL(file) : mediaURL(file);
+  },
+
+  // Switches between the full clips and keyframes, carrying on from the
+  // same moment.
+  setLowBandwidth(on) {
+    if (on === this.lowBandwidth) return;
+    this.lowBandwidth = on;
+    try { localStorage.setItem('glovebox-low-bandwidth', on ? '1' : '0'); } catch { /* Optional preference. */ }
+    if (!this.master) return;
+    const at = this.master.currentTime, playing = this.playing;
+    this.discardPrepared();
+    this.load(this.i, false);
+    for (const v of this.active()) v.addEventListener('loadedmetadata', () => { v.currentTime = at; }, { once: true });
+    if (playing) this.play();
   },
 
   focus(camera) {

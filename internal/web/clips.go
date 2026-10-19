@@ -62,7 +62,8 @@ func (s *Server) handleRecent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.Clips.Recent())
 }
 
-// handleMedia serves a clip, thumbnail or event.json from a snapshot. Only
+// handleMedia serves a clip, thumbnail or event.json from a snapshot; with
+// ?keyframes, a clip's keyframes only. Only
 // files in the index can be served, so the rest of the drive (and the Pi)
 // isn't reachable through this route.
 func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +92,19 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
 
 	var content io.ReadSeeker = f
-	if strings.HasSuffix(name, ".mp4") {
+	if strings.HasSuffix(name, ".mp4") && r.URL.Query().Has("keyframes") {
+		// low-bandwidth playback: 2 frames a second
+		keys, err := mp4fix.Keyframes(f, fi.Size())
+		if errors.Is(err, mp4fix.ErrNoKeyframes) {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		if err != nil {
+			s.fail(w, "reading mp4", err)
+			return
+		}
+		content = keys
+	} else if strings.HasSuffix(name, ".mp4") {
 		fixed, err := mp4fix.NewFile(f, fi.Size())
 		if err != nil {
 			s.fail(w, "reading mp4", err)

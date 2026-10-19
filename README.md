@@ -130,7 +130,7 @@ While the first backup after you arrive home runs, Glovebox keeps the car awake 
 
 Open `http://glovebox.local:8080` from any browser on your home network, including your phone. Sentry and saved events are listed with thumbnails, reasons and places, and your driving footage is grouped into drives.
 
-The player shows a large selected camera with a strip of the others, or all six in a grid, in sync, with seeking, speed, per-camera downloads and fullscreen. Compatible recordings also show what the car recorded alongside the video: **speed, gear, steering wheel angle, accelerator and brake, turn signals and FSD / Autosteer / cruise state**, plus GPS, heading and acceleration in the details panel. These are values from the recording, not the car's current state. See [the viewer and telemetry notes](docs/viewer.md).
+The player shows a large selected camera with a strip of the others, or all six in a grid, in sync, with seeking, speed, per-camera downloads and fullscreen, and a **Low data** mode that plays every camera at 2 frames a second for the Pi's Wi-Fi. Compatible recordings also show what the car recorded alongside the video: **speed, gear, steering wheel angle, accelerator and brake, turn signals and FSD / Autosteer / cruise state**, plus GPS, heading and acceleration in the details panel. These are values from the recording, not the car's current state. See [the viewer and telemetry notes](docs/viewer.md).
 
 Clips the car encrypted itself are backed up as they are and shown with a lock. Download a whole drive or event in one go and open it at [dashcam.tesla.com](https://dashcam.tesla.com), signed in to your Tesla account.
 
