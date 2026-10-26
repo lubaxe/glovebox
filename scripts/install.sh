@@ -225,8 +225,10 @@ done
 for f in "${files[@]}"
 do
   checksum=$(awk -v file="$f" '$2 == file { print }' "$tmp/SHA256SUMS")
-  [ -n "$checksum" ] && (cd "$tmp" && sha256sum -c --quiet <<< "$checksum") ||
+  if [ -z "$checksum" ] || ! (cd "$tmp" && sha256sum -c --quiet <<< "$checksum")
+  then
     die "the download of $f doesn't match SHA256SUMS (or its checksum is missing)"
+  fi
 done
 source "$tmp/glovebox-boot-maintenance"
 
