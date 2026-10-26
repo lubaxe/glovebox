@@ -45,6 +45,7 @@ type ClipStore interface {
 	Captured(id string) bool
 	Capture(ctx context.Context, id, image, mount string) error
 	Forget(id string)
+	DropRecordedAtHome(ctx context.Context) (int, error)
 	Prune(low func() bool, archived func(rel string, size int64) bool) (int, error)
 	Status() store.Status
 	Usage(archived func(rel string, size int64) bool) store.Usage
@@ -385,6 +386,9 @@ func (d *Drive) keepClips(ctx context.Context) error {
 		if err := d.Store.Capture(ctx, s.ID, d.Snapshots.Image(s.ID), s.Mount); err != nil {
 			return fmt.Errorf("keeping clips from %s: %w", s.ID, err)
 		}
+	}
+	if _, err := d.Store.DropRecordedAtHome(ctx); err != nil {
+		d.Log.Warn("couldn't drop clips recorded at home", "err", err)
 	}
 	for _, s := range snaps[:max(len(snaps)-1, 0)] {
 		if err := d.Snapshots.Release(ctx, s.ID); err != nil {

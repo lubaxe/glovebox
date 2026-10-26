@@ -65,6 +65,8 @@ const (
 	NoTelemetry Motion = iota
 	Parked             // in Park and still the whole time
 	Moving
+
+	unreadable Motion = -1 // couldn't be read: kept
 )
 
 // Store is the clip store.
@@ -74,6 +76,15 @@ type Store struct {
 	// Motion reads how the car moved during a clip. nil, or an error, keeps
 	// the clip.
 	Motion func(ctx context.Context, r io.ReaderAt, size int64) (Motion, error)
+	// HomeCutoff, if set, returns when the car got home, in the car's clock
+	// ("2006-01-02T15:04:05"), or "" while it's away. Minutes recorded after
+	// it are left out unless the car moved in them: an awake car at home
+	// records its garage (preconditioning, say), without telemetry, and
+	// those minutes are never archived, so the store would keep them for
+	// good. Moving minutes are kept whatever it says, as it's only cleared
+	// a while after the car has left: the start of a drive can come after
+	// it. Set it unless Recent clips are archived at home too.
+	HomeCutoff func() string
 
 	// hooks for tests
 	cloneRange func(dst, src *os.File, srcOff, length, dstOff int64) error
@@ -225,6 +236,10 @@ func (s *Store) Capture(ctx context.Context, id, image, mount string) error {
 	s.mu.Lock()
 	parked := maps.Clone(s.state.Parked)
 	s.mu.Unlock()
+	cutoff := ""
+	if s.HomeCutoff != nil {
+		cutoff = s.HomeCutoff()
+	}
 	seen := map[string]int64{}
 	added, skipped := 0, 0
 	keys := make([]string, 0, len(minutes))
@@ -232,6 +247,15 @@ func (s *Store) Capture(ctx context.Context, id, image, mount string) error {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	// First what each new minute is: whether a clip has telemetry decides
+	// what the clips without it are, so all of them are read before any is
+	// kept.
+	type candidate struct {
+		files, todo []clipFile
+		motion      Motion
+		home        bool
+	}
+	var candidates []candidate
 	for _, k := range keys {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -251,20 +275,40 @@ func (s *Store) Capture(ctx context.Context, id, image, mount string) error {
 		if len(todo) == 0 {
 			continue
 		}
-		if s.parked(ctx, mount, files) {
-			for _, f := range files {
+		candidates = append(candidates, candidate{files: files, todo: todo,
+			motion: s.motion(ctx, mount, files), home: recordedAfter(k, cutoff)})
+	}
+	s.mu.Lock()
+	for _, c := range candidates {
+		if c.motion == Moving || c.motion == Parked {
+			s.state.Telemetry = true
+		}
+	}
+	telemetry := s.state.Telemetry
+	s.mu.Unlock()
+	for _, c := range candidates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		atHome := c.home && (c.motion == Parked || c.motion == NoTelemetry)
+		if atHome || c.motion == Parked || c.motion == NoTelemetry && telemetry {
+			for _, f := range c.files {
 				parked[f.rel] = f.entry.Size
 			}
 			skipped++
 			continue
 		}
-		for _, f := range todo {
+		for _, f := range c.todo {
 			if err := s.clone(fsys, img, f); err != nil {
 				s.Log.Warn("couldn't keep clip", "file", f.rel, "err", err)
 				continue
 			}
 			added++
 		}
+	}
+	dropped, err := s.dropAfter(ctx, cutoff, parked, seen)
+	if err != nil {
+		s.Log.Warn("couldn't drop clips recorded at home", "err", err)
 	}
 
 	s.mu.Lock()
@@ -276,7 +320,7 @@ func (s *Store) Capture(ctx context.Context, id, image, mount string) error {
 		}
 	}
 	s.state.Parked = parked
-	if added > 0 {
+	if added > 0 || dropped > 0 {
 		s.state.Version++
 	}
 	s.state.Captured = append(slicesDelete(s.state.Captured, id), id)
@@ -284,7 +328,90 @@ func (s *Store) Capture(ctx context.Context, id, image, mount string) error {
 		return err
 	}
 	s.Log.Info("kept clips from snapshot", "id", id, "clips", added, "parked_minutes_skipped", skipped)
+	if dropped > 0 {
+		s.Log.Info("dropped clips recorded at home", "clips", dropped, "home_since", cutoff)
+	}
 	return nil
+}
+
+// DropRecordedAtHome deletes the stored minutes recorded after the car got
+// home in which it didn't move, as Capture does for each new snapshot: for
+// the ones kept before there was one, or before this rule.
+func (s *Store) DropRecordedAtHome(ctx context.Context) (int, error) {
+	if s.HomeCutoff == nil {
+		return 0, nil
+	}
+	cutoff := s.HomeCutoff()
+	s.mu.Lock()
+	parked := maps.Clone(s.state.Parked)
+	s.mu.Unlock()
+	n, err := s.dropAfter(ctx, cutoff, parked, nil)
+	if n == 0 {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Parked = parked
+	s.state.Version++
+	s.Log.Info("dropped clips recorded at home", "clips", n, "home_since", cutoff)
+	return n, errors.Join(err, s.save())
+}
+
+// recordedAfter reports whether the minute key (dir/2006-01-02_15-04-05)
+// was recorded after cutoff, a clip time; "" is never, "0" always.
+func recordedAfter(key, cutoff string) bool {
+	if cutoff == "" {
+		return false
+	}
+	t, err := time.Parse("2006-01-02_15-04-05", path.Base(key))
+	if err != nil {
+		return false
+	}
+	return t.Format("2006-01-02T15:04:05") > cutoff
+}
+
+// dropAfter deletes stored minutes recorded after cutoff in which the car
+// didn't move: kept before the store knew the car was home. They become
+// parked, so a snapshot that still has them doesn't bring them back.
+func (s *Store) dropAfter(ctx context.Context, cutoff string, parked, onDrive map[string]int64) (int, error) {
+	if cutoff == "" {
+		return 0, nil
+	}
+	mins, err := s.minutes()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, m := range mins {
+		start, dir, _ := strings.Cut(m.key, " ")
+		if !recordedAfter(dir+"/"+start, cutoff) {
+			continue
+		}
+		files := make([]clipFile, 0, len(m.files))
+		for _, f := range m.files {
+			if c := clipName.FindStringSubmatch(path.Base(f.rel)); c != nil {
+				files = append(files, clipFile{rel: f.rel, camera: c[2]})
+			}
+		}
+		if len(files) == 0 {
+			continue
+		}
+		if motion := s.motion(ctx, s.Dir, files); motion != Parked && motion != NoTelemetry {
+			continue
+		}
+		for _, f := range m.files {
+			if err := os.Remove(s.path(f.rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return n, err
+			}
+			if size, ok := onDrive[f.rel]; ok {
+				parked[f.rel] = size
+			} else if onDrive == nil {
+				parked[f.rel] = f.size
+			}
+			n++
+		}
+	}
+	return n, nil
 }
 
 type clipFile struct {
@@ -305,11 +432,12 @@ func addClip(minutes map[string][]clipFile, dir string, e exfat.Entry) {
 	minutes[key] = append(minutes[key], clipFile{rel: dir + "/" + e.Name, camera: m[2], entry: e})
 }
 
-// parked classifies a minute by one of its clips: the front camera if it's
-// there. Encrypted clips can't be read and are kept.
-func (s *Store) parked(ctx context.Context, mount string, files []clipFile) bool {
+// motion classifies a minute by one of its clips: the front camera if it's
+// there. Encrypted clips can't be read, nor can anything without Motion:
+// those are unreadable, and kept.
+func (s *Store) motion(ctx context.Context, mount string, files []clipFile) Motion {
 	if s.Motion == nil || strings.Contains(files[0].rel, "/EncryptedClips/") {
-		return false
+		return unreadable
 	}
 	pick := files[0]
 	for _, f := range files {
@@ -319,28 +447,18 @@ func (s *Store) parked(ctx context.Context, mount string, files []clipFile) bool
 	}
 	f, err := os.Open(filepath.Join(mount, filepath.FromSlash(pick.rel)))
 	if err != nil {
-		return false
+		return unreadable
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return false
+		return unreadable
 	}
 	m, err := s.Motion(ctx, f, fi.Size())
 	if err != nil {
-		return false
+		return unreadable
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	switch m {
-	case Moving:
-		s.state.Telemetry = true
-		return false
-	case Parked:
-		s.state.Telemetry = true
-		return true
-	}
-	return s.state.Telemetry
+	return m
 }
 
 func (s *Store) path(rel string) string { return filepath.Join(s.Dir, filepath.FromSlash(rel)) }
@@ -537,11 +655,7 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(s.Dir, stateName+".tmp")
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(s.Dir, stateName))
+	return storage.WriteFileAtomic(filepath.Join(s.Dir, stateName), b, 0o644)
 }
 
 // Usage is what the store holds, split by whether it's archived.

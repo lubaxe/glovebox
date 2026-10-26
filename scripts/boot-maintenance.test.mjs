@@ -296,12 +296,18 @@ test('image prepare packages the canonical helper and final export protects gene
     assert.equal(packaged, helper);
     writeFileSync(join(directory, 'root/usr/local/sbin/glovebox-boot-maintenance'), packaged);
     writeFileSync(join(directory, 'root/etc/fstab'), 'PARTUUID=root / ext4 defaults 0 1\nPARTUUID=boot /boot/firmware vfat defaults 0 2\n');
-    const finalized = spawnSync(bash, ['-c', 'sync() { :; }; source "$TEST_TMP/pi-gen/export-image/05-glovebox-boot-ro/00-run.sh"'], {
+    const finalized = spawnSync(bash, ['-c', 'sync() { :; }; source "$TEST_TMP/pi-gen/export-image/045-glovebox-boot-ro/00-run.sh"'], {
       encoding: 'utf8', env: {...process.env, TEST_TMP: directory, ROOTFS_DIR: join(directory, 'root')},
     });
     assert.ifError(finalized.error);
     assert.equal(finalized.status, 0, finalized.stderr);
     assert.equal(readFileSync(join(directory, 'root/etc/fstab'), 'utf8'), 'PARTUUID=root / ext4 defaults 0 1\nPARTUUID=boot /boot/firmware vfat defaults,ro 0 2\n');
+    // pi-gen runs export-image steps in name order, and 05-finalise packs
+    // the image: the fstab change has to come before it, however the
+    // build sorts
+    const steps = ['04-set-partuuid', '045-glovebox-boot-ro', '05-finalise'];
+    assert.deepEqual([...steps].sort(), steps);
+    assert.ok('045-glovebox-boot-ro'.localeCompare('05-finalise', 'en-US') < 0);
   });
 });
 

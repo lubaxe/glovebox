@@ -367,7 +367,8 @@ func (s *fakeStore) Capture(_ context.Context, id, image, _ string) error {
 	s.captured[id] = true
 	return nil
 }
-func (s *fakeStore) Forget(id string) { delete(s.captured, id) }
+func (s *fakeStore) Forget(id string)                                { delete(s.captured, id) }
+func (s *fakeStore) DropRecordedAtHome(context.Context) (int, error) { return 0, nil }
 func (s *fakeStore) Prune(low func() bool, _ func(string, int64) bool) (int, error) {
 	for low() {
 		s.pruned++

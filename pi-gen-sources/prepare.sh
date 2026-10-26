@@ -64,12 +64,12 @@ cp "$SRC/../deploy/glovebox.service" stage_glovebox/00-glovebox/files/glovebox.s
 cp "$SRC/../internal/bootfs/assets/glovebox-boot-maintenance" stage_glovebox/00-glovebox/files/glovebox-boot-maintenance
 chmod +x stage_glovebox/00-glovebox/00-run.sh stage0/00a-nodoc/00-run.sh
 
-mkdir -p export-image/05-glovebox-boot-ro
-cat > export-image/05-glovebox-boot-ro/00-run.sh << 'EOF'
+mkdir -p export-image/045-glovebox-boot-ro
+cat > export-image/045-glovebox-boot-ro/00-run.sh << 'EOF'
 #!/bin/bash -e
 source "${ROOTFS_DIR}/usr/local/sbin/glovebox-boot-maintenance"
 persist_boot_ro "${ROOTFS_DIR}/etc/fstab"
 EOF
-chmod +x export-image/05-glovebox-boot-ro/00-run.sh
+chmod +x export-image/045-glovebox-boot-ro/00-run.sh
 
 echo 'Build config set. Now use "./build.sh" or "./build-docker.sh" to build the glovebox image.'

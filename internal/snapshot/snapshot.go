@@ -265,7 +265,7 @@ func writeTOC(dir string, toc map[string]int64) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, tocName), b, 0o644)
+	return storage.WriteFileAtomic(filepath.Join(dir, tocName), b, 0o644)
 }
 
 // List returns the complete snapshots, oldest first.
@@ -435,11 +435,7 @@ func writeMeta(dir string, snap Snapshot) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, metaName+".tmp")
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(dir, metaName))
+	return storage.WriteFileAtomic(filepath.Join(dir, metaName), b, 0o644)
 }
 
 func readMeta(dir string) (Snapshot, error) {

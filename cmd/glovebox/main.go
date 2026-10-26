@@ -386,6 +386,10 @@ func newDrive(cfg config.Config, log *slog.Logger, state *archive.State, g drive
 		return d, snaps, nil
 	}
 	kept.Motion = clipMotion
+	if state != nil && !cfg.Archive.RecentAtHome {
+		// what the car records at home isn't archived, so it isn't kept
+		kept.HomeCutoff = state.HomeCutoff
+	}
 	d.Store = kept
 	return d, snaps, kept
 }

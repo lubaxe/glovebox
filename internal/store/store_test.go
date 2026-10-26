@@ -260,3 +260,113 @@ func TestIsParked(t *testing.T) {
 		t.Error("a clip that grew since is still parked")
 	}
 }
+
+// With its state lost (a power cut), the store reads every new minute of a
+// snapshot before keeping any: the garage before the first drive in it is
+// still left out once a later clip shows the car records telemetry.
+func TestTelemetryDecidedPerSnapshot(t *testing.T) {
+	f := newFixture(t)
+	f.add(rc+"2026-10-20_06-38-00-front.mp4", clip("NONE", clipSize), false) // preconditioning in the garage
+	f.add(rc+"2026-10-20_07-20-00-front.mp4", clip("DRIV", clipSize), false)
+	f.capture("snap-000001")
+	if f.stored(rc+"2026-10-20_06-38-00-front.mp4") != nil {
+		t.Error("kept the garage because it came before the drive")
+	}
+	if f.stored(rc+"2026-10-20_07-20-00-front.mp4") == nil {
+		t.Error("drive not kept")
+	}
+}
+
+// With Recent clips not archived at home, what the car records after it got
+// home without moving isn't kept either, even when the store doesn't know
+// yet that the car records telemetry, and what was kept before the store
+// knew goes. Minutes the car moved in are kept.
+func TestRecordedAtHomeNotKept(t *testing.T) {
+	f := newFixture(t)
+	cutoff := ""
+	f.s.HomeCutoff = func() string { return cutoff }
+	f.add(rc+"2026-10-19_16-52-00-front.mp4", clip("NONE", clipSize), false) // awake in the garage
+	f.capture("snap-000001")
+	if f.stored(rc+"2026-10-19_16-52-00-front.mp4") == nil {
+		t.Fatal("not kept before the store knew the car was home")
+	}
+	version := f.s.Version()
+
+	cutoff = "2026-10-19T16:49:23"
+	f.add(rc+"2026-10-19_16-40-00-front.mp4", clip("DRIV", clipSize), false) // the drive home
+	f.add(rc+"2026-10-20_06-38-00-front.mp4", clip("NONE", clipSize), false) // preconditioning
+	f.add(rc+"2026-10-20_06-39-00-front.mp4", clip("PARK", clipSize), false)
+	f.add(rc+"2026-10-20_07-20-00-front.mp4", clip("DRIV", clipSize), false) // left before home was cleared
+	f.capture("snap-000002")
+	for _, rel := range []string{rc + "2026-10-19_16-40-00-front.mp4", rc + "2026-10-20_07-20-00-front.mp4"} {
+		if f.stored(rel) == nil {
+			t.Errorf("%s, driving, not kept", rel)
+		}
+	}
+	for _, rel := range []string{rc + "2026-10-19_16-52-00-front.mp4", rc + "2026-10-20_06-38-00-front.mp4", rc + "2026-10-20_06-39-00-front.mp4"} {
+		if f.stored(rel) != nil {
+			t.Errorf("%s kept though recorded at home", rel)
+		}
+		if !f.s.IsParked(rel, clipSize) {
+			t.Errorf("%s not hidden as parked", rel)
+		}
+	}
+	if f.s.Version() == version {
+		t.Error("version not bumped for the dropped clips")
+	}
+
+	// leaving: the snapshot still has them, but they don't come back
+	cutoff = ""
+	f.capture("snap-000003")
+	if f.stored(rc+"2026-10-20_06-38-00-front.mp4") != nil {
+		t.Error("came back once the car left")
+	}
+}
+
+func TestRecordedAfter(t *testing.T) {
+	for _, c := range []struct {
+		key, cutoff string
+		want        bool
+	}{
+		{rc + "2026-10-20_06-38-00", "2026-10-19T16:49:23", true},
+		{rc + "2026-10-19_16-49-00", "2026-10-19T16:49:23", false},
+		{rc + "2026-10-19_16-49-00", "", false},
+		{rc + "2026-10-19_16-49-00", "0", true},
+		{"TeslaCam/RecentClips/2026-10-20/2026-10-20_06-38-00", "2026-10-19T16:49:23", true},
+	} {
+		if got := recordedAfter(c.key, c.cutoff); got != c.want {
+			t.Errorf("recordedAfter(%q, %q) = %v", c.key, c.cutoff, got)
+		}
+	}
+}
+
+// Clips kept before the rule, or before the car got home, go on the next
+// pass even without a new snapshot.
+func TestDropRecordedAtHomeWithoutNewSnapshot(t *testing.T) {
+	f := newFixture(t)
+	f.add(rc+"2026-10-19_16-40-00-front.mp4", clip("DRIV", clipSize), false)
+	f.add(rc+"2026-10-20_06-38-00-front.mp4", clip("NONE", clipSize), false)
+	f.capture("snap-000001")
+	// as stored by a version without the rule, which kept it
+	if err := os.WriteFile(filepath.Join(f.s.Dir, filepath.FromSlash(rc+"2026-10-20_06-38-00-front.mp4")), clip("NONE", clipSize), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.s.DropRecordedAtHome(context.Background()); n != 0 || err != nil {
+		t.Errorf("without HomeCutoff: %d, %v", n, err)
+	}
+	f.s.HomeCutoff = func() string { return "2026-10-19T16:49:23" }
+	version := f.s.Version()
+	if n, err := f.s.DropRecordedAtHome(context.Background()); n != 1 || err != nil {
+		t.Fatalf("dropped %d, %v", n, err)
+	}
+	if f.stored(rc+"2026-10-20_06-38-00-front.mp4") != nil || f.stored(rc+"2026-10-19_16-40-00-front.mp4") == nil {
+		t.Error("dropped the wrong clips")
+	}
+	if !f.s.IsParked(rc+"2026-10-20_06-38-00-front.mp4", clipSize) || f.s.Version() == version {
+		t.Error("not hidden, or version not bumped")
+	}
+	s, _ := Open(f.s.Dir, f.s.Log)
+	if !s.IsParked(rc+"2026-10-20_06-38-00-front.mp4", clipSize) {
+		t.Error("not saved")
+	}
+}
