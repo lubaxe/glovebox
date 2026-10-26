@@ -1,0 +1,126 @@
+#!/bin/bash
+set -euo pipefail
+
+boot_mode() {
+  local record target filesystem options extra
+  record=$(findmnt --kernel --mountpoint /boot/firmware --noheadings --raw --output TARGET,FSTYPE,OPTIONS) || return 1
+  [[ "$record" != *$'\n'* ]] || return 1
+  read -r target filesystem options extra <<< "$record"
+  [[ "$target" = /boot/firmware && "$filesystem" = vfat && -z "$extra" ]] || return 1
+  case ",$options," in
+    *,ro,*) [[ ",$options," != *,rw,* ]] && printf 'ro\n' ;;
+    *,rw,*) printf 'rw\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+persist_boot_ro() (
+  set -e
+  local fstab=${1:?fstab path required} temporary
+  [[ -f "$fstab" && ! -L "$fstab" ]] || return 1
+  temporary=$(mktemp "${fstab}.glovebox.XXXXXX")
+  trap 'rm -f "$temporary"' EXIT
+  cp --preserve=all "$fstab" "$temporary"
+  awk '
+    /^[[:space:]]*#/ { print; next }
+    $2 == "/boot/firmware" {
+      entries++
+      if ($3 != "vfat" || NF < 6) invalid = 1
+      count = split($4, options, ",")
+      result = ""
+      for (option_number = 1; option_number <= count; option_number++) {
+        if (options[option_number] != "ro" && options[option_number] != "rw") {
+          result = result options[option_number] ","
+        }
+      }
+      $4 = result "ro"
+    }
+    { print }
+    END { if (entries != 1 || invalid) exit 1 }
+  ' "$fstab" > "$temporary"
+  if cmp -s "$temporary" "$fstab"; then exit 0; fi
+  sync -f "$temporary"
+  mv -f "$temporary" "$fstab"
+  sync -f "$(dirname "$fstab")"
+)
+
+boot_maintenance() (
+  set -euo pipefail
+  local protect=0 use_boot=1 original_mode=none restart_service=0 service_state load_state cleanup_ready=0
+  if [[ "${1:-}" = --protect ]]; then protect=1; shift; fi
+  if [[ "${1:-}" = --no-boot ]]; then use_boot=0; shift; fi
+  [[ $# -gt 0 ]] || { echo 'usage: glovebox-boot-maintenance [--protect | --no-boot] command [args...]' >&2; exit 2; }
+  [[ "$(id -u)" = 0 ]] || { echo 'boot maintenance requires root' >&2; exit 1; }
+  exec 9>/run/lock/glovebox-boot-maintenance.lock
+  flock -n 9 || { echo 'another boot maintenance operation is running' >&2; exit 1; }
+  if [[ "$use_boot" = 1 ]]; then
+    original_mode=$(boot_mode) || { echo 'expected an exact vfat mount at /boot/firmware; refusing maintenance' >&2; exit 1; }
+  fi
+  if ! load_state=$(systemctl show --property=LoadState --value glovebox.service); then
+    [[ "$load_state" = not-found ]] || exit 1
+  fi
+  case "$load_state" in
+    not-found) ;;
+    loaded|masked)
+      service_state=$(systemctl show --property=ActiveState --value glovebox.service)
+      case "$service_state" in
+        active|activating|reloading) restart_service=1 ;;
+        inactive|failed) ;;
+        *) echo "unsafe glovebox service state: $service_state" >&2; exit 1 ;;
+      esac ;;
+    *) echo "unsafe glovebox unit load state: $load_state" >&2; exit 1 ;;
+  esac
+
+  cleanup() {
+    local status=$? desired_mode current_mode restored=0
+    trap - EXIT HUP INT TERM
+    if [[ "$cleanup_ready" = 1 ]]; then
+      desired_mode=$original_mode
+      if ! sync; then status=1; fi
+      if [[ "$status" = 0 && "$protect" = 1 ]]; then desired_mode=ro; fi
+      if [[ "$use_boot" = 0 ]]; then
+        restored=1
+      elif current_mode=$(boot_mode); then
+        if [[ "$current_mode" = "$desired_mode" ]] || mount -o "remount,$desired_mode" /boot/firmware; then
+          if current_mode=$(boot_mode) && [[ "$current_mode" = "$desired_mode" ]]; then restored=1; fi
+        fi
+      fi
+      if [[ "$restored" != 1 && "$desired_mode" != "$original_mode" ]]; then
+        status=1
+        if current_mode=$(boot_mode); then
+          if [[ "$current_mode" = "$original_mode" ]] || mount -o "remount,$original_mode" /boot/firmware; then
+            if current_mode=$(boot_mode) && [[ "$current_mode" = "$original_mode" ]]; then restored=1; fi
+          fi
+        fi
+      fi
+      if [[ "$restored" != 1 ]]; then
+        echo 'FAILED to restore boot mount mode; glovebox remains stopped. Repair /boot/firmware before starting it.' >&2
+        status=1
+      elif [[ "$restart_service" = 1 ]]; then
+        if ! systemctl start glovebox.service; then status=1; fi
+      fi
+    fi
+    exit "$status"
+  }
+
+  trap cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [[ "$load_state" != not-found ]]; then
+    systemctl stop glovebox.service
+    service_state=$(systemctl show --property=ActiveState --value glovebox.service)
+    [[ "$service_state" = inactive || "$service_state" = failed ]] || { echo 'glovebox did not stop; refusing writable boot' >&2; exit 1; }
+  fi
+  cleanup_ready=1
+  if [[ "$use_boot" = 1 ]]; then
+    boot_mode > /dev/null || exit 1
+    mount -o remount,rw /boot/firmware
+    [[ "$(boot_mode)" = rw ]] || exit 1
+  fi
+  "$@"
+)
+
+if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then
+  boot_maintenance "$@"
+fi

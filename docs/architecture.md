@@ -60,6 +60,8 @@ internal/keepawake/  keep the car awake over Bluetooth while archiving (tesla-co
 internal/mp4fix/     serve Tesla's MP4s so Chromium can play them
 internal/logfile/    a log on backingfiles that survives power cuts
 internal/system/     running commands and background processes, with fakes for tests
+internal/bootfs/     serialized writable scopes for the normally read-only boot mount
+internal/packages/   the Debian packages Glovebox needs, installed when an update or a start finds them missing
 internal/web/        JSON API + embedded web UI (setup.js holds the setup page and wizard)
 ```
 
@@ -69,7 +71,18 @@ Everything that touches the system (`mount`, `losetup`, configfs, `fsck`, `nmcli
 
 Done: the drive and snapshots, the clip index and web UI, archiving to SMB, NFS, rsync and rclone, keep-awake, the minimal image, extra drives, the setup page, the setup network, the first-run wizard and drive encryption (key file on the Pi; unlocked by the car check).
 
-Next: notifications when a backup finishes, and a read-only root filesystem for more resilience to power cuts.
+Boot protection keeps the standard boot filesystem read-only between checked maintenance scopes. Recovery exports use durable replacement and encryption checks recovery-output access before erasing the old filesystem. These reduce write exposure; they do not establish the cause of the October 2026 corruption incident or guarantee whole-card power-loss safety.
+
+### Updates that skip versions
+
+The web update installs the latest release, whichever version the Pi runs, so a release can't rely on having been preceded by the one before it. Each release therefore describes the whole state it needs and brings the Pi to it, rather than applying the steps since the previous version:
+
+- **System packages:** `packages.Required` is the full list. The updater runs the new binary with `-prepare-update` before replacing anything, and it installs whatever is missing while the old version keeps running; if that fails, nothing changes. Updaters older than 0.9 don't do that, so every start checks again in the background, retries every 15 minutes while it can't (offline, say), warns in the web UI meanwhile, and restarts Glovebox once it has installed something. A start also finishes a `dpkg` run the power cut short. Neither path installs anything that would remove a package or touch the read-only boot partition (kernel, firmware, initramfs): that's an OS update, done by hand.
+- **Boot protection:** every start protects the boot mount and checks that the maintenance helper and the fstab entry are in place.
+
+Old updaters only know what they shipped with, so these stay as they are: the release assets `glovebox-linux-<arch>`, `tesla-control-linux-<arch>`, `glovebox.service` and `SHA256SUMS`; `glovebox -version` printing exactly the release tag; the install path `/usr/local/bin/glovebox`; and the new version being started by `systemctl restart glovebox.service`. A new step that needs to run before the switch belongs in `-prepare-update` (and must be safe to repeat at startup); a release with a step that can't be done that way would need a two-step path through an intermediate release.
+
+Next: notifications when a backup finishes, a read-only root filesystem, and qualification under controlled power cuts on disposable storage.
 
 ## Development
 

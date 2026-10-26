@@ -2,6 +2,7 @@ package wifi
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -222,7 +223,9 @@ func TestResetFileBringsTheSetupNetworkBack(t *testing.T) {
 	if err := os.WriteFile(trigger, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m.reset()
+	if err := m.reset(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if !m.wantAP() || m.setupDone() {
 		t.Error("after the reset the setup network should come back and the wizard run again")
 	}
@@ -236,5 +239,83 @@ func TestResetFileBringsTheSetupNetworkBack(t *testing.T) {
 	}
 	if err := m.FinishSetup(); err != nil || !m.setupDone() {
 		t.Errorf("finished: setupDone = %v, err = %v", m.setupDone(), err)
+	}
+}
+
+type bootWriteFunc func(context.Context, func() error) error
+
+func (write bootWriteFunc) WithWrite(ctx context.Context, fn func() error) error {
+	return write(ctx, fn)
+}
+
+func TestResetBootWriteFailureBlocksChanges(t *testing.T) {
+	m, _ := newManager(t, nil)
+	m.markJoined()
+	if err := m.FinishSetup(); err != nil {
+		t.Fatal(err)
+	}
+	trigger := m.path(m.ResetFile)
+	if err := os.MkdirAll(filepath.Dir(trigger), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trigger, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	guardErr := errors.New("boot is read-only")
+	m.BootWriter = bootWriteFunc(func(context.Context, func() error) error { return guardErr })
+	if err := m.reset(context.Background()); !errors.Is(err, guardErr) {
+		t.Fatalf("err=%v", err)
+	}
+	for _, name := range []string{trigger, m.flag("wifi-joined"), m.flag("setup-done")} {
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("guard failure modified %s: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(m.flag("setup-again")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("unexpected setup-again marker: %v", err)
+	}
+}
+
+func TestResetUsesBootWriteScope(t *testing.T) {
+	m, _ := newManager(t, nil)
+	calls := 0
+	m.BootWriter = bootWriteFunc(func(_ context.Context, fn func() error) error {
+		calls++
+		if err := fn(); err != nil {
+			return err
+		}
+		if _, err := os.Stat(m.path(m.ResetFile)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("reset marker removal must happen within scope: %v", err)
+		}
+		if _, err := os.Stat(m.flag("setup-again")); err != nil {
+			t.Errorf("reset state must be saved within scope: %v", err)
+		}
+		return nil
+	})
+	if err := m.reset(context.Background()); err != nil || calls != 0 {
+		t.Fatalf("missing marker: err=%v calls=%d", err, calls)
+	}
+	if err := os.MkdirAll(filepath.Dir(m.path(m.ResetFile)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.path(m.ResetFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.reset(context.Background()); err != nil || calls != 1 {
+		t.Fatalf("reset: err=%v calls=%d", err, calls)
+	}
+}
+
+func TestResetPropagatesRemovalFailure(t *testing.T) {
+	m, _ := newManager(t, nil)
+	trigger := m.path(m.ResetFile)
+	if err := os.MkdirAll(trigger, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(trigger, "keep"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.reset(context.Background()); err == nil {
+		t.Fatal("reset marker removal failure must be returned")
 	}
 }

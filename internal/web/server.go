@@ -22,9 +22,11 @@ type StatusSource interface {
 
 // Server holds what the HTTP handlers need.
 type Server struct {
-	Version string
-	Status  StatusSource
-	Log     *slog.Logger
+	// Warnings, if set, returns what the web UI should warn about.
+	Warnings func() []string
+	Version  string
+	Status   StatusSource
+	Log      *slog.Logger
 	// Drive, Snapshots and Clips are nil when the drive is disabled.
 	Drive     Drive
 	Snapshots SnapshotStore
@@ -77,8 +79,9 @@ func (s *Server) Handler() http.Handler {
 }
 
 type statusResponse struct {
-	Version string       `json:"version"`
-	System  sysinfo.Info `json:"system"`
+	Warnings []string     `json:"warnings,omitempty"`
+	Version  string       `json:"version"`
+	System   sysinfo.Info `json:"system"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +91,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "couldn't read system status", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, statusResponse{Version: s.Version, System: info})
+	resp := statusResponse{Version: s.Version, System: info}
+	if s.Warnings != nil {
+		resp.Warnings = s.Warnings()
+	}
+	writeJSON(w, resp)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

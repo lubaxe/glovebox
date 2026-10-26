@@ -58,6 +58,20 @@ Your existing user, Wi-Fi, SSH settings and anything else on the system stay as 
 
 ## Set up from your phone
 
+### Read-only boot and OS maintenance
+
+The image and supported Raspberry Pi installer keep the exact vfat mount at
+`/boot/firmware` read-only in normal operation and persist that setting in
+`/etc/fstab`. Existing installed devices migrate on their first restart after
+the web update; that also installs `/usr/local/sbin/glovebox-boot-maintenance`.
+Generic non-Pi and legacy Pi `/boot` installs remain supported without a
+boot-protection guarantee. Legacy boot files must already be writable; the
+installer warns and stops the service but never remounts their filesystem or
+changes their boot fstab entry. For OS/kernel updates,
+unattended-updater coordination, custom boot paths and recovery limitations, see
+[Power loss and read-only boot maintenance](power-loss.md). Do not run boot-writing
+OS updates outside a controlled maintenance window.
+
 ### Join the setup network
 
 If the Pi isn't on Wi-Fi yet, it offers its own network about two minutes after it starts, named **Glovebox-** and four characters (the end of the Pi's Wi-Fi address). It's open, and only there until Glovebox is set up.
@@ -102,7 +116,7 @@ The bottom of the **Settings** page shows the version the Pi runs and checks Git
 
 <img src="screenshots/update.png" width="600" alt="Software update on the Settings page: v0.6.0 is available, with what's new and an Install button">
 
-This works on any board where Glovebox came from the image or `install.sh`: it fetches the 64-bit or 32-bit ARM build to match the board. It updates Glovebox itself, `tesla-control` and the service. It doesn't install system packages a newer release may need. When a release needs new packages, its notes say so: run its `install.sh` again (your settings and recordings are kept) or flash the new image.
+This works on any board where Glovebox came from the image or `install.sh`: it fetches the 64-bit or 32-bit ARM build to match the board. It updates Glovebox itself, `tesla-control` and the service, and installs any system packages the new version needs before switching to it (if that fails, for example because the Pi is offline, the old version keeps running and the page says why). It works from any older version: skipping releases is fine. Updating from a version before 0.9 can't install packages first, so the new version does it once it has started, retrying while it's offline and showing a warning until it's done. It never updates the kernel or firmware; see [Power loss and read-only boot maintenance](power-loss.md) for OS updates.
 
 The previous version is kept as `/usr/local/bin/glovebox.old`. To go back to it:
 

@@ -59,6 +59,23 @@ func TestStatusError(t *testing.T) {
 	}
 }
 
+func TestStatusWarnings(t *testing.T) {
+	warning := "Persistent boot protection setup failed; setup will retry on restart"
+	server := &Server{Version: "test", Status: fakeStatus{}, Warnings: func() []string { return []string{warning} }}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	var result statusResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0] != warning {
+		t.Fatalf("warnings = %q", result.Warnings)
+	}
+}
+
 func TestUnknownPath(t *testing.T) {
 	ts := newServer(fakeStatus{})
 	defer ts.Close()

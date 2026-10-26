@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
 
+	"github.com/lubaxe/glovebox/internal/bootfs"
 	"github.com/lubaxe/glovebox/internal/system"
 )
 
@@ -29,12 +31,19 @@ type Conversion struct {
 	Runner       system.Runner
 	// Release lets go of the filesystem first, e.g. disconnects the car's
 	// drive.
-	Release func(ctx context.Context) error
+	Release          func(ctx context.Context) error
+	writeReservation func(context.Context, io.Writer, int64) error
 }
 
 // Run encrypts the partition and leaves the new volume open and mounted at
 // Mountpoint, with a fresh XFS filesystem labelled "backingfiles".
 func (c *Conversion) Run(ctx context.Context) error {
+	return bootfs.WithWrite(ctx, c.Recovery.BootWriter, func() error {
+		return c.run(ctx)
+	})
+}
+
+func (c *Conversion) run(ctx context.Context) (err error) {
 	recipient, err := c.Recovery.Recipient()
 	if err != nil {
 		return err
@@ -47,6 +56,20 @@ func (c *Conversion) Run(ctx context.Context) error {
 		if dev, err = c.partition(ctx); err != nil {
 			return err
 		}
+	}
+	if err := c.Recovery.preflight(); err != nil {
+		return fmt.Errorf("checking recovery output access: %w", err)
+	}
+	if err := EnsureKey(c.Volume.KeyFile); err != nil {
+		return fmt.Errorf("preparing the device key: %w", err)
+	}
+	reservation, err := reserveRecoverySpace(ctx, c.Recovery.Dir, c.writeReservation)
+	if err != nil {
+		return fmt.Errorf("reserving recovery output space: %w", err)
+	}
+	defer func() { err = errors.Join(err, reservation.release()) }()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if c.Release != nil {
@@ -80,7 +103,10 @@ func (c *Conversion) Run(ctx context.Context) error {
 		return err
 	}
 	defer clear(key)
-	if err := c.Recovery.SaveVolumeKey(recipient, key); err != nil {
+	if err := reservation.release(); err != nil {
+		return fmt.Errorf("releasing recovery output space: %w", err)
+	}
+	if err := c.Recovery.saveVolumeKey(recipient, key); err != nil {
 		return fmt.Errorf("saving the sealed volume key: %w", err)
 	}
 	if err := c.Volume.BackupHeader(ctx, c.Recovery.HeaderPath()); err != nil {
@@ -167,5 +193,5 @@ func (c *Conversion) removeFstab() error {
 		}
 		keep = append(keep, line)
 	}
-	return os.WriteFile(c.Fstab, []byte(strings.Join(keep, "\n")), 0o644)
+	return writeAtomic(c.Fstab, []byte(strings.Join(keep, "\n")), 0o644)
 }

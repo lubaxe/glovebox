@@ -2,6 +2,7 @@ package provision
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -84,6 +85,10 @@ password = "s3cret pass"
 
 func TestApplyNothing(t *testing.T) {
 	p, _ := newProvisioner(t)
+	p.BootWriter = bootWriteFunc(func(context.Context, func() error) error {
+		t.Fatal("inert config must not open a boot write scope")
+		return nil
+	})
 	if applied, err := p.Apply(context.Background(), bootFile, etcFile); applied || err != nil {
 		t.Errorf("no file: applied=%v err=%v", applied, err)
 	}
@@ -251,5 +256,179 @@ func TestWiFiCountryWithoutCmdline(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(r.Commands(), "\n"), "iw reg set CA") {
 		t.Errorf("commands: %v", r.Commands())
+	}
+}
+
+type bootWriteFunc func(context.Context, func() error) error
+
+func (write bootWriteFunc) WithWrite(ctx context.Context, fn func() error) error {
+	return write(ctx, fn)
+}
+
+func TestApplyBootWriteFailureBlocksChanges(t *testing.T) {
+	for _, contents := range []string{fullConfig, "[system]\nwifi_password = [\n"} {
+		t.Run(contents, func(t *testing.T) {
+			p, runner := newProvisioner(t)
+			write(t, p.Root, bootFile, contents)
+			write(t, p.Root, "/boot/firmware/rclone.conf", "secret")
+			before := read(t, p.Root, "/boot/firmware/cmdline.txt")
+			guardErr := errors.New("boot is read-only")
+			calls := 0
+			p.BootWriter = bootWriteFunc(func(context.Context, func() error) error {
+				calls++
+				return guardErr
+			})
+			applied, err := p.Apply(context.Background(), bootFile, etcFile)
+			if applied || !errors.Is(err, guardErr) || calls != 1 {
+				t.Fatalf("applied=%v err=%v calls=%d", applied, err, calls)
+			}
+			if read(t, p.Root, bootFile) != contents || read(t, p.Root, "/boot/firmware/rclone.conf") != "secret" || read(t, p.Root, "/boot/firmware/cmdline.txt") != before {
+				t.Error("boot files changed despite guard failure")
+			}
+			for _, name := range []string{etcFile, "/etc/hostname", "/boot/firmware/glovebox-status.txt"} {
+				if exists(p.Root, name) {
+					t.Errorf("unexpected modification: %s", name)
+				}
+			}
+			if len(runner.Commands()) != 0 {
+				t.Errorf("unexpected commands: %v", runner.Commands())
+			}
+		})
+	}
+}
+
+func TestApplyUsesOneBootWriteScope(t *testing.T) {
+	p, _ := newProvisioner(t)
+	write(t, p.Root, bootFile, fullConfig)
+	write(t, p.Root, "/boot/firmware/rclone.conf", "[remote]\ntype = drive\n")
+	calls := 0
+	p.BootWriter = bootWriteFunc(func(_ context.Context, fn func() error) error {
+		calls++
+		if calls > 1 {
+			t.Fatal("nested boot write scope")
+		}
+		if err := fn(); err != nil {
+			return err
+		}
+		if exists(p.Root, bootFile) || exists(p.Root, "/boot/firmware/rclone.conf") {
+			t.Error("boot config removal must happen within scope")
+		}
+		if !exists(p.Root, "/boot/firmware/glovebox-status.txt") || !strings.Contains(read(t, p.Root, "/boot/firmware/cmdline.txt"), "regdom=CA") {
+			t.Error("status and country writes must happen within scope")
+		}
+		return nil
+	})
+	if applied, err := p.Apply(context.Background(), bootFile, etcFile); !applied || err != nil || calls != 1 {
+		t.Fatalf("applied=%v err=%v calls=%d", applied, err, calls)
+	}
+}
+
+func TestSetWiFiCountryBootWriteFailure(t *testing.T) {
+	p, runner := newProvisioner(t)
+	before := read(t, p.Root, "/boot/firmware/cmdline.txt")
+	guardErr := errors.New("boot is read-only")
+	p.BootWriter = bootWriteFunc(func(context.Context, func() error) error { return guardErr })
+	if err := p.SetWiFiCountry(context.Background(), "CA"); !errors.Is(err, guardErr) {
+		t.Fatalf("err=%v", err)
+	}
+	if read(t, p.Root, "/boot/firmware/cmdline.txt") != before || len(runner.Commands()) != 0 {
+		t.Error("country changed despite guard failure")
+	}
+}
+
+func TestSetWiFiCountryUnchangedDoesNotRewrite(t *testing.T) {
+	p, runner := newProvisioner(t)
+	p.BootWriter = bootWriteFunc(func(context.Context, func() error) error {
+		t.Fatal("unchanged country must not open a boot write scope")
+		return nil
+	})
+	cmdline := p.path("/boot/firmware/cmdline.txt")
+	stamp := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(cmdline, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cmdline+".tmp", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetWiFiCountry(context.Background(), "US"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(cmdline)
+	if err != nil || !info.ModTime().Equal(stamp) {
+		t.Fatalf("cmdline was rewritten: info=%v err=%v", info, err)
+	}
+	if !strings.Contains(strings.Join(runner.Commands(), "\n"), "iw reg set US") {
+		t.Errorf("runtime country was not set: %v", runner.Commands())
+	}
+}
+
+func TestApplyStatusWriteFailure(t *testing.T) {
+	p, _ := newProvisioner(t)
+	write(t, p.Root, bootFile, fullConfig)
+	if err := os.Mkdir(p.path("/boot/firmware/glovebox-status.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Apply(context.Background(), bootFile, etcFile); err == nil {
+		t.Fatal("status write failure must be returned")
+	}
+}
+
+func TestSetWiFiCountryRereadsWithinScope(t *testing.T) {
+	p, _ := newProvisioner(t)
+	calls := 0
+	p.BootWriter = bootWriteFunc(func(_ context.Context, fn func() error) error {
+		calls++
+		write(t, p.Root, "/boot/firmware/cmdline.txt", "console=tty2 rootwait cfg80211.ieee80211_regdom=US\n")
+		return fn()
+	})
+	if err := p.SetWiFiCountry(context.Background(), "CA"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, p.Root, "/boot/firmware/cmdline.txt"); got != "console=tty2 rootwait cfg80211.ieee80211_regdom=CA\n" || calls != 1 {
+		t.Fatalf("cmdline=%q calls=%d", got, calls)
+	}
+}
+
+func TestWriteFileReplacesAndRestrictsPermissions(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(name, []byte("old secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name+".tmp", []byte("stale longer secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(name, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(name)
+	if err != nil || string(contents) != "new" {
+		t.Fatalf("contents=%q err=%v", contents, err)
+	}
+	if _, err := os.Stat(name + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temporary file should be renamed: %v", err)
+	}
+	info, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("permissions=%o", info.Mode().Perm())
+	}
+}
+
+func TestWriteFileFailureKeepsOriginal(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(name, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(name+".tmp", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(name, []byte("replacement"), 0o600); err == nil {
+		t.Fatal("expected temporary-file failure")
+	}
+	contents, err := os.ReadFile(name)
+	if err != nil || string(contents) != "original" {
+		t.Fatalf("contents=%q err=%v", contents, err)
 	}
 }

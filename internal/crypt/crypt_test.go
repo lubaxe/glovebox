@@ -112,7 +112,7 @@ func TestFormatCreatesKeyAndUsesAdiantum(t *testing.T) {
 	if err != nil || st.Size() != KeySize || st.Mode().Perm() != 0o400 && os.PathSeparator == '/' {
 		t.Fatalf("key file: %v %v", st, err)
 	}
-	want := "cryptsetup luksFormat -q --type luks2 --cipher xchacha12,aes-adiantum-plain64 --key-size 256 --sector-size 4096 " +
+	want := "cryptsetup luksFormat -q --type luks2 --luks2-metadata-size 16384 --luks2-keyslots-size 16777216 --cipher xchacha12,aes-adiantum-plain64 --key-size 256 --sector-size 4096 " +
 		"--pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label glovebox-crypt --key-file " + v.KeyFile + " /dev/mmcblk0p3"
 	if got := r.Commands(); len(got) != 1 || got[0] != want {
 		t.Errorf("commands = %q\nwant %q", got, want)
@@ -390,18 +390,33 @@ func TestConversion(t *testing.T) {
 	if err := rec.SetRecipient(id.Recipient().String()); err != nil {
 		t.Fatal(err)
 	}
+	writer := &scopeWriter{t: t}
+	rec.BootWriter = writer
 	dir := t.TempDir()
 	mnt := filepath.ToSlash(filepath.Join(dir, "backingfiles")) // Run creates it
 	fstab := filepath.Join(dir, "fstab")
 	if err := os.WriteFile(fstab, []byte("proc /proc proc defaults 0 0\nLABEL=backingfiles "+mnt+" xfs noatime,nofail 0 2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	released := false
+	released, keyRead := false, false
 	part := filepath.Join(dir, "mmcblk0p3") // stands in for the partition
 	if err := os.WriteFile(part, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r.Handler = func(cmd string) ([]byte, error) {
+		if !writer.active {
+			t.Fatalf("command outside writable scope: %s", cmd)
+		}
+		// The reservation is given back once the volume key has been
+		// read, so the sealed key and header backup have room.
+		if keyRead {
+			assertRecoveryReservation(t, rec.Dir, false)
+		} else if !strings.HasPrefix(cmd, "findmnt -n -o SOURCE") && !strings.HasPrefix(cmd, "lsblk ") {
+			assertRecoveryReservation(t, rec.Dir, true)
+		}
+		if strings.HasPrefix(cmd, "cryptsetup luksDump") {
+			keyRead = true
+		}
 		switch {
 		case cmd == "findmnt -n -o SOURCE "+mnt:
 			return []byte(part + "\n"), nil
@@ -417,13 +432,36 @@ func TestConversion(t *testing.T) {
 	c := &Conversion{
 		Mountpoint: mnt, Fstab: fstab, SnapshotRoot: "/run/glovebox/snapshots",
 		Volume: v, Recovery: rec, Runner: r,
-		Release: func(context.Context) error { released = true; return nil },
+		Release: func(context.Context) error {
+			if !writer.active {
+				t.Fatal("release outside writable scope")
+			}
+			assertRecoveryReservation(t, rec.Dir, true)
+			key, err := os.ReadFile(v.KeyFile)
+			if err != nil || len(key) != KeySize {
+				t.Fatalf("device key was not prepared before release: %d bytes, %v", len(key), err)
+			}
+			entries, err := os.ReadDir(rec.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".recovery-preflight-") {
+					t.Fatal("preflight cleanup did not finish before release")
+				}
+			}
+			released = true
+			return nil
+		},
 	}
 	if err := c.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !released {
 		t.Error("the drive wasn't released first")
+	}
+	if writer.calls != 1 || writer.active {
+		t.Errorf("scope calls=%d, active=%v", writer.calls, writer.active)
 	}
 	var got []string
 	for _, cmd := range r.Commands() {

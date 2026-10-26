@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -213,6 +214,9 @@ func TestCheckAndInstall(t *testing.T) {
 	if !strings.Contains(cmds, "systemctl daemon-reload") {
 		t.Errorf("no daemon-reload for the new unit: %s", cmds)
 	}
+	if !strings.Contains(cmds, " -prepare-update") {
+		t.Errorf("the new version didn't prepare: %s", cmds)
+	}
 	// a second install while restarting is refused
 	if err := u.Install(); err == nil {
 		t.Error("second install allowed")
@@ -253,6 +257,34 @@ func TestBadChecksumChangesNothing(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 3 {
 		t.Errorf("files left: %v", entries)
+	}
+}
+
+func TestFailedPrepareChangesNothing(t *testing.T) {
+	gh := &fakeGitHub{tag: "v0.4.0", files: map[string]string{"glovebox-linux-arm64": "v0.4.0", "tesla-control-linux-arm64": "new tc", "glovebox.service": "new unit"}}
+	u, dir, runner, restarted := newTest(t, gh)
+	version := runner.Handler
+	runner.Handler = func(cmdline string) ([]byte, error) {
+		if strings.HasSuffix(cmdline, " -prepare-update") {
+			return nil, errors.New("updating the package lists: offline")
+		}
+		return version(cmdline)
+	}
+	u.Check(context.Background())
+	if err := u.Install(); err != nil {
+		t.Fatal(err)
+	}
+	s := waitIdle(t, u)
+	if !strings.Contains(s.Error, "preparing v0.4.0") || !strings.Contains(s.Error, "offline") {
+		t.Errorf("error = %q", s.Error)
+	}
+	for name, want := range map[string]string{"glovebox": "v0.3.0", "glovebox.service": "unit"} {
+		if got := read(t, filepath.Join(dir, name)); got != want {
+			t.Errorf("%s replaced: %q", name, got)
+		}
+	}
+	if len(restarted) != 0 {
+		t.Error("restarted after a failed prepare")
 	}
 }
 

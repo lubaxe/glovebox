@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/lubaxe/glovebox/internal/archive"
+	"github.com/lubaxe/glovebox/internal/bootfs"
 	"github.com/lubaxe/glovebox/internal/clips"
 	"github.com/lubaxe/glovebox/internal/config"
 	"github.com/lubaxe/glovebox/internal/crypt"
@@ -26,6 +27,7 @@ import (
 	"github.com/lubaxe/glovebox/internal/gadget"
 	"github.com/lubaxe/glovebox/internal/keepawake"
 	"github.com/lubaxe/glovebox/internal/logfile"
+	"github.com/lubaxe/glovebox/internal/packages"
 	"github.com/lubaxe/glovebox/internal/provision"
 	"github.com/lubaxe/glovebox/internal/setup"
 	"github.com/lubaxe/glovebox/internal/snapshot"
@@ -55,21 +57,32 @@ func run() error {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	runDir := flag.String("run-dir", "/run/glovebox", "directory for mount points, sockets and short-lived key files")
 	noUSB := flag.Bool("no-usb", false, "don't present the drives over USB (for testing a second instance on a Pi)")
+	prepare := flag.Bool("prepare-update", false, "install the system packages this version needs and exit (the updater runs this before switching to it)")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(version)
 		return nil
 	}
+	if *prepare {
+		return prepareUpdate()
+	}
 
 	// Apply the boot partition's glovebox.toml (first boot, or a new one the
 	// user dropped on the card) before reading the config.
 	bootLog := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	bootWriter := bootfs.New("/boot/firmware", system.Exec{Log: bootLog})
+	installed := installedHere(*noUSB)
+	bootWarnings, err := prepareBoot(context.Background(), bootWriter, installed)
+	if err != nil {
+		return err
+	}
 	if radios := provision.UnblockRadios("/"); len(radios) > 0 {
 		bootLog.Info("unblocked radios", "radios", radios) // Wi-Fi for archiving, Bluetooth for keep-awake
 	}
 	if *bootConfig != "" {
 		prov := provision.New(system.Exec{Log: bootLog}, bootLog)
+		prov.BootWriter = bootWriter
 		if _, err := prov.Apply(context.Background(), *bootConfig, *configPath); err != nil {
 			bootLog.Error("couldn't apply the boot partition's config; see glovebox-status.txt on the card", "err", err)
 		}
@@ -98,6 +111,9 @@ func run() error {
 		slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: level}),
 	})
 	log.Info("starting", "version", version, "config", *configPath)
+	for _, warning := range bootWarnings {
+		log.Error(warning)
+	}
 	if missing {
 		log.Warn("config file not found, using defaults", "path", *configPath)
 	}
@@ -105,7 +121,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	api := &web.Server{Version: version, Status: sysinfo.NewReader(), Log: log}
+	warnings := &notices{}
+	warnings.set("boot", bootWarnings...)
+	api := &web.Server{Version: version, Status: sysinfo.NewReader(), Log: log, Warnings: warnings.list}
 	api.Setup = &setup.Setup{
 		ConfigPath: *configPath, Options: archiveOptions(log, *runDir),
 		Runner: system.Exec{Log: log}, Gateway: setup.Gateway,
@@ -119,10 +137,16 @@ func run() error {
 	}
 	updater := update.New("lubaxe/glovebox", version, system.Exec{Log: log}, api.Restart, log)
 	api.Update = updater
+	if installed {
+		go keepPackages(ctx, packages.New(system.Exec{Log: log}).Ensure, warnings, api.Restart, log, packageRetry)
+	}
 
 	wifiMgr := wifi.New(system.Exec{Log: log}, log)
+	wifiMgr.BootWriter = bootWriter
 	if cfg.System.SetupNetwork {
-		wifiMgr.SetCountry = provision.New(system.Exec{Log: log}, log).SetWiFiCountry
+		wifiProvision := provision.New(system.Exec{Log: log}, log)
+		wifiProvision.BootWriter = bootWriter
+		wifiMgr.SetCountry = wifiProvision.SetWiFiCountry
 		// set up by hand, before the wizard existed
 		wifiMgr.SetupDone = func() bool { return cfg.Archive.Enabled }
 		api.WiFi = wifiMgr
@@ -145,6 +169,7 @@ func run() error {
 	if cfg.Drive.Enabled {
 		ds := &driveStarter{cfg: cfg, log: log, logFile: logFile, car: car, busy: updater.Busy, runDir: *runDir, noUSB: *noUSB}
 		enc := newEncryption(cfg, car, log, *configPath, *bootConfig, *runDir)
+		enc.Recovery.BootWriter = bootWriter
 		api.Encryption = enc
 		if enc.TakeRequest() {
 			// asked for in the web UI: before anything uses backingfiles

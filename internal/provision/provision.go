@@ -20,11 +20,13 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/lubaxe/glovebox/internal/bootfs"
 	"github.com/lubaxe/glovebox/internal/config"
 	"github.com/lubaxe/glovebox/internal/system"
 	"github.com/lubaxe/glovebox/internal/wifi"
@@ -36,10 +38,11 @@ type Provisioner struct {
 	// tests.
 	Root string
 	// LoginUser gets the SSH key.
-	LoginUser string
-	Runner    system.Runner
-	Log       *slog.Logger
-	Now       func() time.Time
+	LoginUser  string
+	Runner     system.Runner
+	Log        *slog.Logger
+	Now        func() time.Time
+	BootWriter bootfs.Writer
 	// lookupUser returns a user's uid, gid and home directory.
 	lookupUser func(name string) (uid, gid int, home string, err error)
 	chown      func(name string, uid, gid int) error
@@ -62,10 +65,21 @@ func (p *Provisioner) Apply(ctx context.Context, bootFile, etcFile string) (bool
 	}
 	if err != nil {
 		// tell the user on the card itself; they'll look there
-		_ = p.note(bootFile, "Glovebox couldn't use glovebox.toml:\n\n"+err.Error()+"\n\nFix the file and boot again.\n")
-		return false, err
+		noteErr := bootfs.WithWrite(ctx, p.BootWriter, func() error {
+			return p.note(bootFile, "Glovebox couldn't use glovebox.toml:\n\n"+err.Error()+"\n\nFix the file and boot again.\n")
+		})
+		return false, errors.Join(err, noteErr)
 	}
+	var applied bool
+	err = bootfs.WithWrite(ctx, p.BootWriter, func() error {
+		var applyErr error
+		applied, applyErr = p.apply(ctx, bootFile, etcFile, cfg)
+		return applyErr
+	})
+	return applied, err
+}
 
+func (p *Provisioner) apply(ctx context.Context, bootFile, etcFile string, cfg config.Config) (bool, error) {
 	var done []string
 	s := cfg.System
 	if s.Hostname != "" {
@@ -75,7 +89,7 @@ func (p *Provisioner) Apply(ctx context.Context, bootFile, etcFile string) (bool
 		done = append(done, "hostname "+s.Hostname)
 	}
 	if s.WiFiCountry != "" {
-		if err := p.SetWiFiCountry(ctx, s.WiFiCountry); err != nil {
+		if err := p.setWiFiCountry(ctx, s.WiFiCountry); err != nil {
 			return false, err
 		}
 		done = append(done, "Wi-Fi country "+s.WiFiCountry)
@@ -132,10 +146,12 @@ func (p *Provisioner) Apply(ctx context.Context, bootFile, etcFile string) (bool
 	if err := os.Remove(p.path(bootFile)); err != nil {
 		return false, err
 	}
-	_ = p.note(bootFile, fmt.Sprintf("Glovebox applied glovebox.toml on %s:\n\n- %s\n\n"+
+	if err := p.note(bootFile, fmt.Sprintf("Glovebox applied glovebox.toml on %s:\n\n- %s\n\n"+
 		"The settings are now in %s and secrets were moved to root-only files.\n"+
 		"To change something, put a new glovebox.toml here and restart the Pi.\n",
-		p.Now().Format(time.RFC1123), strings.Join(done, "\n- "), etcFile))
+		p.Now().Format(time.RFC1123), strings.Join(done, "\n- "), etcFile)); err != nil {
+		return false, err
+	}
 	p.Log.Info("applied boot partition config", "applied", strings.Join(done, ", "))
 	return true, nil
 }
@@ -172,6 +188,20 @@ func (p *Provisioner) setHostname(ctx context.Context, name string) error {
 // SetWiFiCountry sets the regulatory domain for this boot and in
 // cmdline.txt for later boots.
 func (p *Provisioner) SetWiFiCountry(ctx context.Context, cc string) error {
+	current, err := os.ReadFile(p.path("/boot/firmware/cmdline.txt"))
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && bytes.Equal(current, countryCmdline(current, cc))) {
+		_, _ = p.Runner.Run(ctx, "iw", "reg", "set", cc)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return bootfs.WithWrite(ctx, p.BootWriter, func() error {
+		return p.setWiFiCountry(ctx, cc)
+	})
+}
+
+func (p *Provisioner) setWiFiCountry(ctx context.Context, cc string) error {
 	cmdline := p.path("/boot/firmware/cmdline.txt")
 	b, err := os.ReadFile(cmdline)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -183,7 +213,18 @@ func (p *Provisioner) SetWiFiCountry(ctx context.Context, cc string) error {
 	if err != nil {
 		return err
 	}
-	line := strings.TrimSpace(string(b))
+	updated := countryCmdline(b, cc)
+	if !bytes.Equal(b, updated) {
+		if err := writeFile(cmdline, updated, 0o644); err != nil {
+			return err
+		}
+	}
+	_, _ = p.Runner.Run(ctx, "iw", "reg", "set", cc)
+	return nil
+}
+
+func countryCmdline(current []byte, cc string) []byte {
+	line := strings.TrimSpace(string(current))
 	opt := "cfg80211.ieee80211_regdom=" + cc
 	re := regexp.MustCompile(`cfg80211\.ieee80211_regdom=\S*`)
 	if re.MatchString(line) {
@@ -191,11 +232,7 @@ func (p *Provisioner) SetWiFiCountry(ctx context.Context, cc string) error {
 	} else {
 		line += " " + opt
 	}
-	if err := writeFile(cmdline, []byte(line+"\n"), 0o644); err != nil {
-		return err
-	}
-	_, _ = p.Runner.Run(ctx, "iw", "reg", "set", cc)
-	return nil
+	return []byte(line + "\n")
 }
 
 // setWiFi writes a NetworkManager connection, readable only by root.
@@ -272,13 +309,34 @@ func writeFile(name string, b []byte, perm os.FileMode) error {
 		return err
 	}
 	tmp := name + ".tmp"
-	if err := os.WriteFile(tmp, b, perm); err != nil {
+	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, perm); err != nil { // WriteFile keeps an existing file's mode
+	defer file.Close()
+	if err := file.Chmod(perm); err != nil {
 		return err
 	}
-	return os.Rename(tmp, name)
+	if _, err := file.Write(b); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, name); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(filepath.Dir(name))
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 // UnblockRadios clears the software rf-kill switch for Wi-Fi and Bluetooth,

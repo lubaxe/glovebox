@@ -6,6 +6,8 @@
 
 # glovebox
 install -m 755 files/glovebox "${ROOTFS_DIR}/usr/local/bin/glovebox"
+install -d "${ROOTFS_DIR}/usr/local/sbin"
+install -m 755 files/glovebox-boot-maintenance "${ROOTFS_DIR}/usr/local/sbin/glovebox-boot-maintenance"
 # Tesla's Bluetooth tool, for keep-awake
 install -m 755 files/tesla-control "${ROOTFS_DIR}/usr/local/bin/tesla-control"
 # their licenses

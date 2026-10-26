@@ -223,6 +223,7 @@ function renderChips() {
   const u = usbState();
   const n = nasState();
   const chips = [chip(u.text, u.state, u.detail)];
+  if (status.system?.warnings?.length) chips.push(chip('Needs attention', 'bad', status.system.warnings.join('\n')));
   const nas = chip(n.text, n.state, `${n.detail}\nClick to look for new clips now.`);
   nas.classList.add('clickable');
   nas.setAttribute('role', 'button');
@@ -251,6 +252,7 @@ function renderFoot() {
   $('#foot').replaceChildren(
     el('div', {}, s.system.hostname),
     el('div', {}, `version ${s.version}`),
+    ...(s.warnings || []).map(warning => el('div', { class: 'error', role: 'alert' }, warning)),
     updateInfo?.available && updateInfo.latest && updateInfo.state === 'idle'
       ? el('a', { class: 'update-link', href: '#/settings/updates' }, `${updateInfo.latest.version} is available`) : '');
 }

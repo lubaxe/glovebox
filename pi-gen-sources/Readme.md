@@ -25,6 +25,11 @@ pi-gen's `stage0` (base system and kernel) and `stage1` (bootable minimum), then
 - USB device mode (`dtoverlay=dwc2`), Wi-Fi power saving off, logs in RAM, Bluetooth unblocked
 - SSH with keys only; the `glovebox` user has no password (pi-gen insists on one at build time, so `build-image.sh` passes a random one that the image then removes) and passwordless `sudo`
 - the root partition keeps its built size; Glovebox creates the `backingfiles` partition in the free space at first boot
+- the exact vfat `/boot/firmware` fstab entry is set to `ro` in a final export step, after pi-gen generates the image's filesystem configuration; `/usr/local/sbin/glovebox-boot-maintenance` is installed from the same canonical asset embedded by Glovebox and published with the release
+
+OS/kernel/firmware updates need a stable power supply and the controlled writable
+window described in [Power loss and read-only boot maintenance](../docs/power-loss.md).
+Automatic boot-writing updaters are not intercepted or silently disabled.
 
 #### Manual build
 

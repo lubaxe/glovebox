@@ -343,6 +343,12 @@ func (u *Updater) installFiles(ctx context.Context) (string, error) {
 		if got := strings.TrimSpace(string(out)); got != rel.TagName {
 			return "", fmt.Errorf("the new version says it's %q, not %s", got, rel.TagName)
 		}
+		// It installs the system packages it needs, while this version
+		// keeps running: if that fails, nothing has been replaced.
+		u.step("Installing the system packages " + rel.TagName + " needs")
+		if _, err := u.Runner.Run(ctx, s.tmp, "-prepare-update"); err != nil {
+			return "", fmt.Errorf("preparing %s: %w", rel.TagName, err)
+		}
 	}
 
 	u.step("Installing " + rel.TagName)

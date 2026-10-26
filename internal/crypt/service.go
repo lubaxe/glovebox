@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lubaxe/glovebox/internal/bootfs"
 )
 
 // Car check modes.
@@ -300,20 +302,22 @@ func (s *Service) SetRecipient(ctx context.Context, recipient string) error {
 		return err
 	}
 	st := s.Status()
-	if st.Encrypted {
-		if st.State != Unlocked {
-			return errors.New("the drive is locked; it has to be unlocked to change the key")
+	return bootfs.WithWrite(ctx, s.Recovery.BootWriter, func() error {
+		if st.Encrypted {
+			if st.State != Unlocked {
+				return errors.New("the drive is locked; it has to be unlocked to change the key")
+			}
+			key, err := s.Volume.VolumeKey(ctx)
+			if err != nil {
+				return err
+			}
+			defer clear(key)
+			if err := s.Recovery.saveVolumeKey(recipient, key); err != nil {
+				return err
+			}
 		}
-		key, err := s.Volume.VolumeKey(ctx)
-		if err != nil {
-			return err
-		}
-		defer clear(key)
-		if err := s.Recovery.SaveVolumeKey(recipient, key); err != nil {
-			return err
-		}
-	}
-	return s.Recovery.SetRecipient(recipient)
+		return s.Recovery.setRecipient(recipient)
+	})
 }
 
 // RequestEncrypt asks for the drive to be encrypted at the next start; the

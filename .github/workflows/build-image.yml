@@ -112,6 +112,7 @@ jobs:
           unset GOOS GOARCH GOARM CGO_ENABLED
           cp deploy/glovebox.service deploy/glovebox.toml LICENSE THIRD-PARTY-NOTICES.md "$out/"
           cp pi-gen-sources/00-glovebox/files/glovebox-boot.toml "$out/"
+          cp internal/bootfs/assets/glovebox-boot-maintenance "$out/glovebox-boot-maintenance"
           # install.sh fetches this release's files, not whatever is latest
           sed "s/^VERSION=latest .*/VERSION=$GLOVEBOX_VERSION/" scripts/install.sh > "$out/install.sh"
           grep -q "^VERSION=$GLOVEBOX_VERSION$" "$out/install.sh"

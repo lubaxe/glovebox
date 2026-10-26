@@ -2,6 +2,7 @@ package crypt
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
+
+	"github.com/lubaxe/glovebox/internal/bootfs"
 )
 
 // Recovery keeps what the user's own key pair needs to recover the volume:
@@ -24,6 +27,7 @@ type Recovery struct {
 	// RecipientFile holds the user's age public key, e.g.
 	// /etc/glovebox/crypt/recovery.pub.
 	RecipientFile string
+	BootWriter    bootfs.Writer
 }
 
 // Files in Recovery.Dir.
@@ -60,17 +64,23 @@ func (r Recovery) Recipient() (string, error) {
 // SetRecipient stores the user's public key, on the Pi and, for reference,
 // next to the sealed key on the boot partition.
 func (r Recovery) SetRecipient(recipient string) error {
+	return bootfs.WithWrite(context.Background(), r.BootWriter, func() error {
+		return r.setRecipient(recipient)
+	})
+}
+
+func (r Recovery) setRecipient(recipient string) error {
 	recipient, err := ParseRecipient(recipient)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(r.RecipientFile), 0o700); err != nil {
+	if err := mkdirAllDurable(filepath.Dir(r.RecipientFile), 0o700); err != nil {
 		return err
 	}
 	if err := writeAtomic(r.RecipientFile, []byte(recipient+"\n"), 0o644); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
+	if err := mkdirAllDurable(r.Dir, 0o755); err != nil {
 		return err
 	}
 	return writeAtomic(filepath.Join(r.Dir, "recovery.pub"), []byte(recipient+"\n"), 0o644)
@@ -79,17 +89,53 @@ func (r Recovery) SetRecipient(recipient string) error {
 // SaveVolumeKey seals the volume key to the user's public key and writes
 // it, with the README, to Dir.
 func (r Recovery) SaveVolumeKey(recipient string, key []byte) error {
+	return bootfs.WithWrite(context.Background(), r.BootWriter, func() error {
+		return r.saveVolumeKey(recipient, key)
+	})
+}
+
+func (r Recovery) saveVolumeKey(recipient string, key []byte) error {
 	sealed, err := Seal(recipient, key)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
+	if err := mkdirAllDurable(r.Dir, 0o755); err != nil {
 		return err
 	}
 	if err := writeAtomic(filepath.Join(r.Dir, VolumeKeyFile), sealed, 0o644); err != nil {
 		return err
 	}
 	return writeAtomic(filepath.Join(r.Dir, ReadmeFile), []byte(readme), 0o644)
+}
+
+func (r Recovery) preflight() (err error) {
+	if err := mkdirAllDurable(r.Dir, 0o755); err != nil {
+		return err
+	}
+	for _, name := range []string{VolumeKeyFile, HeaderFile, ReadmeFile} {
+		info, err := os.Lstat(filepath.Join(r.Dir, name))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err == nil && !info.Mode().IsRegular() {
+			return fmt.Errorf("recovery output %s is not a regular file", name)
+		}
+	}
+	dir, err := os.MkdirTemp(r.Dir, ".recovery-preflight-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, os.RemoveAll(dir), syncDirectory(r.Dir))
+	}()
+	probe := filepath.Join(dir, "probe")
+	if err := writeAtomic(probe, []byte("recovery write check\n"), 0o600); err != nil {
+		return err
+	}
+	if err := writeAtomic(probe, []byte("recovery replace check\n"), 0o600); err != nil {
+		return err
+	}
+	return nil
 }
 
 // VolumeKey unseals the volume key with the user's private key: the
@@ -144,14 +190,6 @@ func Unseal(identity string, sealed []byte) ([]byte, error) {
 		return nil, err
 	}
 	return io.ReadAll(rd)
-}
-
-func writeAtomic(path string, data []byte, perm fs.FileMode) error {
-	tmp := path + ".new"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 const readme = `Glovebox drive encryption: recovery

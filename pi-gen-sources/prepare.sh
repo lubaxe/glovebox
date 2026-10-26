@@ -61,6 +61,15 @@ cp "$GLOVEBOX_BIN" stage_glovebox/00-glovebox/files/glovebox
 cp "$TESLA_CONTROL_BIN" stage_glovebox/00-glovebox/files/tesla-control
 cp "$SRC/../LICENSE" "$SRC/../THIRD-PARTY-NOTICES.md" stage_glovebox/00-glovebox/files/
 cp "$SRC/../deploy/glovebox.service" stage_glovebox/00-glovebox/files/glovebox.service
+cp "$SRC/../internal/bootfs/assets/glovebox-boot-maintenance" stage_glovebox/00-glovebox/files/glovebox-boot-maintenance
 chmod +x stage_glovebox/00-glovebox/00-run.sh stage0/00a-nodoc/00-run.sh
+
+mkdir -p export-image/05-glovebox-boot-ro
+cat > export-image/05-glovebox-boot-ro/00-run.sh << 'EOF'
+#!/bin/bash -e
+source "${ROOTFS_DIR}/usr/local/sbin/glovebox-boot-maintenance"
+persist_boot_ro "${ROOTFS_DIR}/etc/fstab"
+EOF
+chmod +x export-image/05-glovebox-boot-ro/00-run.sh
 
 echo 'Build config set. Now use "./build.sh" or "./build-docker.sh" to build the glovebox image.'

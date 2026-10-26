@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lubaxe/glovebox/internal/bootfs"
 	"github.com/lubaxe/glovebox/internal/system"
 )
 
@@ -40,9 +41,10 @@ const (
 // Manager runs Wi-Fi.
 type Manager struct {
 	// Root is prepended to system paths; "/" on the Pi.
-	Root   string
-	Runner system.Runner
-	Log    *slog.Logger
+	Root       string
+	Runner     system.Runner
+	Log        *slog.Logger
+	BootWriter bootfs.Writer
 	// StateDir keeps the flags saying whether Wi-Fi was ever joined and
 	// setup finished, e.g. /etc/glovebox.
 	StateDir string
@@ -407,7 +409,9 @@ func (m *Manager) Run(ctx context.Context) {
 		m.Log.Info("no Wi-Fi; no setup network", "interface", ClientInterface)
 		return
 	}
-	m.reset()
+	if err := m.reset(ctx); err != nil {
+		m.Log.Warn("couldn't apply the setup request", "file", m.ResetFile, "err", err)
+	}
 	start := m.Now()
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
@@ -534,20 +538,32 @@ func Portal(app http.Handler) http.Handler {
 
 // reset forgets that the Pi joined Wi-Fi and was set up, if ResetFile asks
 // for it.
-func (m *Manager) reset() {
+func (m *Manager) reset(ctx context.Context) error {
 	if m.ResetFile == "" {
-		return
+		return nil
 	}
 	if _, err := os.Stat(m.path(m.ResetFile)); err != nil {
-		return
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
 	}
-	_ = os.Remove(m.flag("wifi-joined"))
-	_ = os.Remove(m.flag("setup-done"))
-	if err := os.MkdirAll(filepath.Dir(m.flag("setup-again")), 0o755); err == nil {
-		_ = os.WriteFile(m.flag("setup-again"), nil, 0o644)
-	}
-	if err := os.Remove(m.path(m.ResetFile)); err != nil {
-		m.Log.Warn("couldn't delete the setup request", "file", m.ResetFile, "err", err)
+	if err := bootfs.WithWrite(ctx, m.BootWriter, func() error {
+		for _, name := range []string{"wifi-joined", "setup-done"} {
+			if err := os.Remove(m.flag(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(m.flag("setup-again")), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(m.flag("setup-again"), nil, 0o644); err != nil {
+			return err
+		}
+		return os.Remove(m.path(m.ResetFile))
+	}); err != nil {
+		return err
 	}
 	m.Log.Info("setup requested on the boot partition: the setup network comes back until Wi-Fi is joined and the wizard finished", "file", m.ResetFile)
+	return nil
 }

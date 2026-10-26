@@ -17,9 +17,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io/fs"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/lubaxe/glovebox/internal/system"
@@ -35,7 +37,9 @@ const (
 	// Cipher is Adiantum, made for CPUs without AES instructions.
 	Cipher = "xchacha12,aes-adiantum-plain64"
 	// KeySize is the device key file's size in bytes.
-	KeySize = 64
+	KeySize          = 64
+	luksMetadataSize = 16 << 10
+	luksKeyslotsSize = 16 << 20
 )
 
 // Volume is the encrypted volume holding backingfiles.
@@ -141,6 +145,7 @@ func (v *Volume) Format(ctx context.Context, dev string) error {
 	// The key is random, so a slow key derivation buys nothing and would
 	// only delay the car's drive at every start.
 	_, err := v.Runner.Run(ctx, "cryptsetup", "luksFormat", "-q", "--type", "luks2",
+		"--luks2-metadata-size", strconv.Itoa(luksMetadataSize), "--luks2-keyslots-size", strconv.Itoa(luksKeyslotsSize),
 		"--cipher", Cipher, "--key-size", "256", "--sector-size", "4096",
 		"--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000",
 		"--label", Label, "--key-file", v.KeyFile, dev)
@@ -180,19 +185,40 @@ func (v *Volume) VolumeKey(ctx context.Context) ([]byte, error) {
 
 // BackupHeader saves the volume's header to path, replacing it. The header
 // is useless without a key, and restores a volume whose header got damaged.
-func (v *Volume) BackupHeader(ctx context.Context, path string) error {
+func (v *Volume) BackupHeader(ctx context.Context, path string) (err error) {
 	dev, err := v.Find(ctx)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := mkdirAllDurable(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir, err := os.MkdirTemp(filepath.Dir(path), ".header-backup-*")
+	if err != nil {
 		return err
 	}
-	_, err = v.Runner.Run(ctx, "cryptsetup", "luksHeaderBackup", dev, "--header-backup-file", path)
-	return err
+	defer func() {
+		err = errors.Join(err, os.RemoveAll(dir), syncDirectory(filepath.Dir(path)))
+	}()
+	temporary := filepath.Join(dir, HeaderFile)
+	if _, err := v.Runner.Run(ctx, "cryptsetup", "luksHeaderBackup", dev, "--header-backup-file", temporary); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(temporary, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return errors.Join(errors.New("cryptsetup wrote an empty or non-regular header backup"), file.Close())
+	}
+	if err := syncAndClose(file); err != nil {
+		return err
+	}
+	return replaceDurable(temporary, path)
 }
 
 // tempFile writes data to a new private file in TempDir.
@@ -230,22 +256,37 @@ func wipe(path string) {
 // EnsureKey creates the device key file, KeySize random bytes readable only
 // by root, unless it already exists.
 func EnsureKey(path string) error {
-	if st, err := os.Stat(path); err == nil {
-		if st.Size() != KeySize {
-			return fmt.Errorf("%s is %d bytes; a device key is %d", path, st.Size(), KeySize)
+	file, err := os.Open(path)
+	if err == nil {
+		info, err := file.Stat()
+		if err != nil {
+			return errors.Join(err, file.Close())
 		}
-		return nil
+		if !info.Mode().IsRegular() || info.Size() != KeySize {
+			return errors.Join(fmt.Errorf("%s must be a regular %d-byte device key", path, KeySize), file.Close())
+		}
+		key := make([]byte, KeySize)
+		defer clear(key)
+		if _, err := io.ReadFull(file, key); err != nil {
+			return errors.Join(err, file.Close())
+		}
+		if runtime.GOOS == "windows" {
+			err = file.Close()
+		} else {
+			err = syncAndClose(file)
+		}
+		return errors.Join(err, syncDirectory(filepath.Dir(path)))
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := mkdirAllDurable(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	key := make([]byte, KeySize)
+	defer clear(key)
 	if _, err := rand.Read(key); err != nil {
 		return err
 	}
-	tmp := path + ".new"
-	if err := os.WriteFile(tmp, key, 0o400); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeAtomic(path, key, 0o400)
 }

@@ -37,6 +37,13 @@ good() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$*"; warnings+=("$*"); }
 bad() { printf '  \033[31m✗\033[0m %s\n' "$*"; problems+=("$*"); }
 
+unmanaged_boot_writable() {
+  local options
+  options=$(findmnt --kernel --target "$boot/config.txt" --noheadings --raw --output OPTIONS) || return 1
+  [[ "$options" != *$'\n'* ]] || return 1
+  [[ ",$options," = *,rw,* && ",$options," != *,ro,* ]]
+}
+
 say "Checking this board"
 
 case "$(uname -m)" in
@@ -156,6 +163,12 @@ then
   if [ -n "$boot" ]
   then
     good "boot partition: $boot"
+    if [ "$boot" != /boot/firmware ]; then
+      warn "legacy $boot layout is unmanaged: only /boot/firmware gets automatic read-only boot protection; $boot must already be writable"
+      if ! unmanaged_boot_writable; then
+        bad "legacy $boot must already be writable; the installer will not remount it or its containing filesystem"
+      fi
+    fi
     if grep -qE 'g_ether|g_serial|g_mass_storage|g_multi' "$boot/cmdline.txt" 2> /dev/null
     then
       warn "$boot/cmdline.txt loads another USB gadget (g_ether, g_serial, ...); remove it, Glovebox needs the port to itself"
@@ -191,6 +204,9 @@ fi
 
 # ---- install ----------------------------------------------------------------
 
+maintenance_options=(--no-boot)
+if [ "$device_mode" != own ] && [ "$boot" = /boot/firmware ]; then maintenance_options=(--protect); fi
+
 if [ "$VERSION" = latest ]
 then
   base="https://github.com/$REPO/releases/latest/download"
@@ -198,30 +214,46 @@ else
   base="https://github.com/$REPO/releases/download/$VERSION"
 fi
 
-say "Installing packages"
-apt-get update -q
-apt-get install -y -q --no-install-recommends xfsprogs cryptsetup-bin exfatprogs dosfstools curl ca-certificates \
-	rsync rclone nfs-common openssh-client dnsmasq-base avahi-daemon
-apt-get clean # the downloaded packages, not needed any more
-
 say "Downloading Glovebox ($VERSION)"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-files=("glovebox-linux-$arch" "tesla-control-linux-$arch" glovebox.service glovebox-boot.toml LICENSE THIRD-PARTY-NOTICES.md)
+files=("glovebox-linux-$arch" "tesla-control-linux-$arch" glovebox.service glovebox-boot.toml glovebox-boot-maintenance LICENSE THIRD-PARTY-NOTICES.md)
 for f in "${files[@]}" SHA256SUMS
 do
   curl -fsSL -o "$tmp/$f" "$base/$f" || die "couldn't download $base/$f"
 done
-(cd "$tmp" && grep -E " ($(IFS='|'; echo "${files[*]}"))\$" SHA256SUMS | sha256sum -c --quiet) ||
-  die "the downloads don't match SHA256SUMS"
+for f in "${files[@]}"
+do
+  checksum=$(awk -v file="$f" '$2 == file { print }' "$tmp/SHA256SUMS")
+  [ -n "$checksum" ] && (cd "$tmp" && sha256sum -c --quiet <<< "$checksum") ||
+    die "the download of $f doesn't match SHA256SUMS (or its checksum is missing)"
+done
+source "$tmp/glovebox-boot-maintenance"
+
+install_glovebox() {
+if [ "$device_mode" != own ]; then
+  if [ "$boot" = /boot/firmware ]; then
+    persist_boot_ro /etc/fstab
+  else
+    unmanaged_boot_writable || die "legacy $boot is no longer writable; refusing installation without remounting it"
+  fi
+fi
+
+say "Installing packages"
+apt-get update -q
+apt-get install -y -q --no-install-recommends xfsprogs cryptsetup-bin exfatprogs dosfstools curl ca-certificates \
+	rsync rclone nfs-common openssh-client dnsmasq-base avahi-daemon
+apt-get clean
 
 install -m 755 "$tmp/glovebox-linux-$arch" /usr/local/bin/glovebox
 install -m 755 "$tmp/tesla-control-linux-$arch" /usr/local/bin/tesla-control
+install -d /usr/local/sbin
+install -m 755 "$tmp/glovebox-boot-maintenance" /usr/local/sbin/glovebox-boot-maintenance
 install -m 644 "$tmp/glovebox.service" /etc/systemd/system/glovebox.service
 install -d /usr/share/doc/glovebox
 install -m 644 "$tmp/LICENSE" "$tmp/THIRD-PARTY-NOTICES.md" /usr/share/doc/glovebox/
 install -d -m 700 /etc/glovebox
-if [ "$boot" = /boot/firmware ] && [ ! -f "$boot/glovebox.toml" ] && [ ! -f /etc/glovebox/glovebox.toml ]
+if [ "$device_mode" != own ] && [ "$boot" = /boot/firmware ] && [ ! -f "$boot/glovebox.toml" ] && [ ! -f /etc/glovebox/glovebox.toml ]
 then
   # the optional settings file, where Glovebox looks for it
   install -m 644 "$tmp/glovebox-boot.toml" "$boot/glovebox.toml"
@@ -240,7 +272,7 @@ case "$device_mode" in
     else
       # [all] so it isn't caught in a model-specific section
       printf '\n[all]\n# Glovebox: the Pi acts as the car'"'"'s USB drive\n%s\n' "$overlay" >> "$boot/config.txt"
-      reboot_needed=1
+      touch "$tmp/reboot-needed"
     fi ;;
 esac
 
@@ -275,6 +307,12 @@ else
   systemctl daemon-reload
   mount /backingfiles
 fi
+
+systemctl daemon-reload
+}
+
+boot_maintenance "${maintenance_options[@]}" install_glovebox
+[ ! -f "$tmp/reboot-needed" ] || reboot_needed=1
 
 say "Starting Glovebox"
 systemctl daemon-reload
